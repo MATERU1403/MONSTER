@@ -2,7 +2,8 @@
 --  MONSTER  -  BasedHub, reskinned
 --
 --  Loads BasedHub and dresses it as MONSTER: the crimson scheme, the name, the
---  MONSTER intro film (cut to its own track) and the Salvatore film on Home.
+--  MONSTER intro film (cut to its own track), the Salvatore film on Home, and that
+--  same Home film as a second intro (MONSTER II in Settings, under Intro).
 --  Visuals only: BasedHub's features, tabs and layout are left as they are.
 --
 --  The films sit where BasedHub keeps its own, as frame sequences under
@@ -129,6 +130,45 @@ if boardReady and Board then
 	for _, key in ipairs({ "film", "big" }) do
 		local player = Board[key]
 		if player and not player.dead then player:destroy() end
+	end
+end
+
+-- ---- A second MONSTER intro: the Home film, played whole with its own track before the hub.
+-- It is "MONSTER II" in Settings, under Intro, and in Shuffle. It plays through the brand
+-- slot's player, with the Home film lent to that slot for the one run.
+local HOME_INTRO, HOME_LABEL = "monsterhome", "MONSTER II"
+local baseRun = Loader and Loader.run
+local Controls = B.Controls
+local baseDropdown = Controls and Controls.dropdown
+if boardReady and baseRun and Loader.others and B.FILMS then
+	Loader.others[HOME_INTRO] = function(done)
+		local brandWas = B.FILMS.brand
+		B.FILMS.brand = BOARD
+		Loader.active = false           -- (set for this intro by the hub; the brand run sets it again)
+		local ok = pcall(baseRun, function()
+			B.FILMS.brand = brandWas
+			done()
+		end, "brand")
+		if not ok then
+			B.FILMS.brand = brandWas
+			done()
+		end
+	end
+	if Loader.SHUFFLE and not table.find(Loader.SHUFFLE, HOME_INTRO) then table.insert(Loader.SHUFFLE, HOME_INTRO) end
+	if baseDropdown then
+		Controls.dropdown = function(section, spec)
+			if type(spec) == "table" and spec.id == "app.intro" and type(spec.options) == "table" then
+				local options, added = {}, false
+				for _, option in ipairs(spec.options) do
+					options[#options + 1] = option
+					if option[1] == HOME_INTRO then added = true end
+				end
+				if not added then table.insert(options, 2, { HOME_INTRO, HOME_LABEL }) end   -- (right after MONSTER)
+				spec = table.clone(spec)
+				spec.options = options
+			end
+			return baseDropdown(section, spec)
+		end
 	end
 end
 
@@ -305,6 +345,12 @@ if unload then
 	B.unload = function(...)
 		renamer:Disconnect()
 		for _, connection in ipairs(adopted) do connection:Disconnect() end
+		if Loader and Loader.others then Loader.others[HOME_INTRO] = nil end
+		if Loader and Loader.SHUFFLE then
+			local at = table.find(Loader.SHUFFLE, HOME_INTRO)
+			if at then table.remove(Loader.SHUFFLE, at) end
+		end
+		if baseDropdown and Controls then Controls.dropdown = baseDropdown end
 		pcall(function()
 			for _, item in ipairs(GUI:GetDescendants()) do
 				if string.sub(item.Name, 1, 7) == "Monster" then item:Destroy() end
