@@ -1,49 +1,131 @@
 -- ============================================================================
---  MONSTER Hub Loader v2
+--  MONSTER  -  BasedHub, reskinned
 --
---  Loads BasedHub, then skins it as MONSTER: dark crimson theme, gothic fonts,
---  atmospheric overlays, rebranded UI, custom cinematic, and MONSTER intro.
+--  Loads BasedHub and dresses it as MONSTER: the crimson scheme, the name, the
+--  MONSTER intro film (cut to its own track) and the Salvatore film on Home.
+--  Visuals only: BasedHub's features, tabs and layout are left as they are.
 --
---  Usage: execute this file in your executor.
+--  The films sit where BasedHub keeps its own, as frame sequences under
+--  workspace/BasedHub/monster (the intro) and workspace/BasedHub/monsterboard.
 -- ============================================================================
+local genv = getgenv()
+local RunService = game:GetService("RunService")
+local host = gethui()
 
--- ---- Step 1: Load BasedHub ----
+local function film(folder, tag, fps, count)
+	local function half(side, x, rectX)
+		return { path = folder .. "/ultra/" .. tag .. "_" .. side .. "_", x = x, w = 0.5, rectX = rectX, rectW = 910, texW = 912 }
+	end
+	return {
+		version = 1, fps = fps, count = count, duration = count / fps, audio = folder .. "/" .. tag .. "_audio.ogg",
+		sets = {
+			hd = { width = 1024, height = 576, digits = 4, tiles = { { path = folder .. "/hd/" .. tag .. "_h_", x = 0, w = 1, rectX = 0, rectW = 1024, texW = 1024 } } },
+			ultra = { width = 1820, height = 1024, digits = 4, tiles = { half("l", 0, 0), half("r", 0.5, 2) } },
+		},
+	}
+end
+local INTRO = film("monster", "mon1", 60, 1596)
+local BOARD = film("monsterboard", "mob1", 30, 496)
+
+local function onDisk(path)
+	local ok, yes = pcall(isfile, "BasedHub/" .. path)
+	return ok and yes == true
+end
+local introOnDisk = onDisk("monster/hd/mon1_h_0000.jpg")
+
+-- ---- The name: every BasedHub label that carries it reads MONSTER, from the loading screen on.
+-- BasedHub redraws some of them (the dropdowns), so each one keeps a watch on its own text.
+local NAMES = { ["BASED"] = "MONSTER", ["BASED HUB"] = "MONSTER" }
+if introOnDisk then NAMES["BASED brand film"] = "MONSTER" end
+local watched = setmetatable({}, { __mode = "k" })
+
+local function dropHub(nameLabel)
+	local parent = nameLabel.Parent
+	if not parent then return end
+	for _, sibling in ipairs(parent:GetChildren()) do
+		if sibling:IsA("TextLabel") and sibling.Text == "hub" then sibling.Visible = false end
+	end
+end
+local function fix(label)
+	local to = NAMES[label.Text]
+	if to then label.Text = to end
+	if label.Text == "MONSTER" then dropHub(label) end
+end
+local function watch(item)
+	if watched[item] or not (item:IsA("TextLabel") or item:IsA("TextButton")) then return end
+	local parent = item.Parent
+	if not (NAMES[item.Text] or (parent and parent.Name == "Select")) then return end
+	watched[item] = true
+	fix(item)
+	item:GetPropertyChangedSignal("Text"):Connect(function() fix(item) end)
+end
+local renamer = host.DescendantAdded:Connect(function(item)
+	if item:IsA("TextLabel") or item:IsA("TextButton") then task.defer(watch, item) end
+end)
+
+-- ---- BasedHub. Its own launch intro is held off for this one launch: the MONSTER one takes its place.
+local introWas = genv.BASED_INTRO
+genv.BASED_INTRO = "off"
 loadstring(game:HttpGet("https://raw.githubusercontent.com/Mrzaytoon/based-hub/main/loader.lua"))()
 
--- ---- Step 2: Wait for BASED to boot ----
-local genv = getgenv()
-local waited = 0
-while not genv.BASED and waited < 30 do
-	task.wait(0.25)
-	waited = waited + 0.25
-end
+local deadline = os.clock() + 30
+while not genv.BASED and os.clock() < deadline do RunService.Heartbeat:Wait() end
 local B = genv.BASED
-if not B then warn("[MONSTER] BASED hub did not load"); return end
-
-local tries = 0
-while not B.Window or not B.Window.built do
-	task.wait(0.25)
-	tries = tries + 1
-	if tries > 120 then break end
-end
-task.wait(0.5)
-
--- ---- Step 3: Grab references ----
-local Theme = B.Theme
-local T = B.T
-local UI = B.UI
-local Window = B.Window
-local Config = B.Config
-local util = B.util
-local hex = util.hex
-
-local GUI = Window.gui
-if not GUI then
-	warn("[MONSTER] Window.gui is nil, cannot reskin")
+if not B then
+	genv.BASED_INTRO = introWas
+	renamer:Disconnect()
+	warn("[MONSTER] BasedHub did not load")
 	return
 end
+local Film, Loader, Board = B.Film, B.Loader, B.Board
 
--- ---- Step 4: MONSTER colour scheme ----
+-- ---- The films: MONSTER plays where the brand film did; the Home board plays the Salvatore film.
+local introReady = Film and (Film.has("ultra", INTRO) or Film.has("hd", INTRO))
+local boardReady = Film and (Film.has("ultra", BOARD) or Film.has("hd", BOARD))
+if introReady and B.FILMS then B.FILMS.brand = INTRO end
+if boardReady and Board then
+	Board.spec = BOARD
+	-- players already made from the old film are let go; the board makes new ones from this one
+	for _, key in ipairs({ "film", "big" }) do
+		local player = Board[key]
+		if player and not player.dead then player:destroy() end
+	end
+end
+
+-- Catch BasedHub's own call for its launch intro, when it has not been made yet, and play the
+-- chosen one (MONSTER, unless another was picked in Settings) before the hub comes up.
+local played, caught = false, false
+local run = Loader and Loader.run
+if run then
+	Loader.run = function(done, override, ...)
+		if not played and override == nil then
+			played, caught = true, true
+			genv.BASED_INTRO = introWas
+			return run(done, introWas or B.Config.get("app.intro"), ...)
+		end
+		return run(done, override, ...)
+	end
+end
+
+deadline = os.clock() + 60
+while rawget(B, "bootMs") == nil and os.clock() < deadline do RunService.Heartbeat:Wait() end
+genv.BASED_INTRO = introWas
+
+local Theme, T, UI, Window, Config = B.Theme, B.T, B.UI, B.Window, B.Config
+local hex = B.util.hex
+local GUI = Window.gui
+
+-- ---- Too late to catch it (BasedHub was already up): hide the hub, play the intro, bring it back.
+if run and not played then
+	played = true
+	local chosen = Config.get("app.intro")
+	if chosen ~= "off" then
+		Window.showActive(false)
+		run(function() Window.showActive(true) end, chosen)
+	end
+end
+
+-- ---- Colour: pitch-black base, bone ink, blood-red accent
 Theme.schemes.monster = {
 	label = "Monster",
 	base  = hex("050208"),
@@ -56,265 +138,42 @@ Theme.schemes.monster = {
 	dark   = true,
 }
 table.insert(Theme.schemeOrder, "monster")
-
-table.insert(Theme.accents, 1, {
-	id    = "crimson",
-	label = "Crimson",
-	color = hex("8B0000"),
-})
-
-Theme.set({
-	scheme = "monster",
-	accent = hex("8B0000"),
-	glass  = 0.85,
-	radius = 0.8,
-})
-
+table.insert(Theme.accents, 1, { id = "crimson", label = "Crimson", color = hex("8B0000") })
+Theme.set({ scheme = "monster", accent = hex("8B0000"), glass = 0.85, radius = 0.8 })
 T.ok   = hex("3D8B37")
 T.warn = hex("C9842A")
 T.bad  = hex("DC143C")
 
--- BasedHub's own brand film would play before ours; this persists in prefs
-pcall(Config.set, "app.intro", "off")
-
--- ---- Step 5: REBRAND all "BASED" text to "MONSTER" ----
--- BasedHub redraws some labels (e.g. the Menu style dropdown) after boot, so
--- each renamed label keeps a watcher that renames it again.
-local watched = setmetatable({}, { __mode = "k" })
-
-local function rebrand(label)
-	if not (label:IsA("TextLabel") or label:IsA("TextButton")) or label.Text ~= "BASED" then return end
-	label.Text = "MONSTER"
-	if watched[label] then return end
-	watched[label] = true
-	label:GetPropertyChangedSignal("Text"):Connect(function()
-		if label.Text == "BASED" then label.Text = "MONSTER" end
-	end)
-end
-
-for _, d in ipairs(GUI:GetDescendants()) do rebrand(d) end
-GUI.DescendantAdded:Connect(function(d) task.defer(rebrand, d) end)
-
--- ---- Step 6: Download cinematic image and set home hero ----
-task.defer(function()
-	local ok, err = pcall(function()
-		local imgUrl = "https://raw.githubusercontent.com/MATERU1403/MONSTER/main/cinematic/damon_dark.jpg"
-		local imgData = game:HttpGet(imgUrl)
-		if not imgData or #imgData < 100 then
-			warn("[MONSTER] Failed to download cinematic image")
-			return
+-- ---- Home: the card's still is the Salvatore film's own opening frame (shown until the film runs)
+task.spawn(function()
+	local still
+	for _, item in ipairs(GUI:GetDescendants()) do
+		if item.Name == "Still" and item:IsA("ImageLabel") and item.Parent and item.Parent.Name == "Hero" then still = item; break end
+	end
+	if not still then return end
+	local id = boardReady and B.Assets.id("monsterboard/mob1_still.jpg")
+	if not id then
+		local ok, data = pcall(game.HttpGet, game, "https://raw.githubusercontent.com/MATERU1403/MONSTER/main/cinematic/damon_dark.jpg")
+		if ok and type(data) == "string" and #data > 100 then
+			writefile("monster_hero.jpg", data)
+			id = getcustomasset("monster_hero.jpg")
 		end
-
-		local fileName = "monster_hero.jpg"
-		writefile(fileName, imgData)
-		local contentId = getcustomasset(fileName)
-
-		local function findHeroStill(parent)
-			for _, desc in ipairs(parent:GetDescendants()) do
-				if desc:IsA("ImageLabel") and desc.Name == "Still" then
-					local hero = desc.Parent
-					if hero and hero.Name == "Hero" then
-						return desc
-					end
-				end
-			end
-			return nil
-		end
-
-		local still = findHeroStill(GUI)
-		if still then
-			still.Image = contentId
-			still.ScaleType = Enum.ScaleType.Crop
-			still.ImageTransparency = 0
-		else
-			for _, page in ipairs(GUI:GetDescendants()) do
-				if page.Name == "home" and (page:IsA("Frame") or page:IsA("ScrollingFrame")) then
-					for _, d in ipairs(page:GetDescendants()) do
-						if d:IsA("ImageLabel") and d.Name == "Still" then
-							d.Image = contentId
-							d.ScaleType = Enum.ScaleType.Crop
-							d.ImageTransparency = 0
-							break
-						end
-					end
-					break
-				end
-			end
-		end
-	end)
-	if not ok then warn("[MONSTER] Hero image error: " .. tostring(err)) end
+	end
+	if id then
+		still.Image = id
+		still.ScaleType = Enum.ScaleType.Crop
+	end
 end)
 
--- ---- Step 7: Custom MONSTER intro overlay ----
-task.defer(function()
-	local ok, err = pcall(function()
-		local imgUrl1 = "https://raw.githubusercontent.com/MATERU1403/MONSTER/main/cinematic/damon_dark.jpg"
-		local imgUrl2 = "https://raw.githubusercontent.com/MATERU1403/MONSTER/main/cinematic/skull_dark.jpg"
-
-		local data1 = game:HttpGet(imgUrl1)
-		local data2 = game:HttpGet(imgUrl2)
-
-		writefile("monster_intro_1.jpg", data1)
-		writefile("monster_intro_2.jpg", data2)
-		local asset1 = getcustomasset("monster_intro_1.jpg")
-		local asset2 = getcustomasset("monster_intro_2.jpg")
-
-		local TweenService = game:GetService("TweenService")
-
-		local introGui = Instance.new("ScreenGui")
-		introGui.Name = "MonsterIntro"
-		introGui.DisplayOrder = 99999
-		introGui.IgnoreGuiInset = true
-		introGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-		introGui.Parent = gethui()
-
-		local bg = Instance.new("Frame")
-		bg.Name = "BG"
-		bg.Size = UDim2.fromScale(1, 1)
-		bg.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-		bg.BackgroundTransparency = 0
-		bg.BorderSizePixel = 0
-		bg.ZIndex = 1
-		bg.Parent = introGui
-
-		local img1 = Instance.new("ImageLabel")
-		img1.Name = "Frame1"
-		img1.Size = UDim2.fromScale(1, 1)
-		img1.Position = UDim2.fromScale(0, 0)
-		img1.BackgroundTransparency = 1
-		img1.Image = asset1
-		img1.ScaleType = Enum.ScaleType.Crop
-		img1.ImageTransparency = 1
-		img1.ZIndex = 2
-		img1.Parent = bg
-
-		local img2 = Instance.new("ImageLabel")
-		img2.Name = "Frame2"
-		img2.Size = UDim2.fromScale(1, 1)
-		img2.Position = UDim2.fromScale(0, 0)
-		img2.BackgroundTransparency = 1
-		img2.Image = asset2
-		img2.ScaleType = Enum.ScaleType.Crop
-		img2.ImageTransparency = 1
-		img2.ZIndex = 3
-		img2.Parent = bg
-
-		local title = Instance.new("TextLabel")
-		title.Name = "Title"
-		title.Size = UDim2.fromScale(0.8, 0.15)
-		title.Position = UDim2.fromScale(0.1, 0.4)
-		title.BackgroundTransparency = 1
-		title.Text = "MONSTER"
-		title.TextColor3 = Color3.fromRGB(139, 0, 0)
-		title.TextTransparency = 1
-		title.TextScaled = true
-		title.Font = Enum.Font.GothamBlack
-		title.ZIndex = 10
-		title.Parent = bg
-
-		local subtitle = Instance.new("TextLabel")
-		subtitle.Name = "Sub"
-		subtitle.Size = UDim2.fromScale(0.6, 0.06)
-		subtitle.Position = UDim2.fromScale(0.2, 0.56)
-		subtitle.BackgroundTransparency = 1
-		subtitle.Text = "THE DARKNESS AWAKENS"
-		subtitle.TextColor3 = Color3.fromRGB(200, 180, 160)
-		subtitle.TextTransparency = 1
-		subtitle.TextScaled = true
-		subtitle.Font = Enum.Font.Gotham
-		subtitle.ZIndex = 10
-		subtitle.Parent = bg
-
-		local redLine = Instance.new("Frame")
-		redLine.Name = "RedLine"
-		redLine.Size = UDim2.new(0, 0, 0, 2)
-		redLine.Position = UDim2.fromScale(0.5, 0.54)
-		redLine.AnchorPoint = Vector2.new(0.5, 0.5)
-		redLine.BackgroundColor3 = Color3.fromRGB(139, 0, 0)
-		redLine.BackgroundTransparency = 0.3
-		redLine.BorderSizePixel = 0
-		redLine.ZIndex = 10
-		redLine.Parent = bg
-
-		task.wait(0.3)
-
-		TweenService:Create(img1, TweenInfo.new(1.5, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { ImageTransparency = 0 }):Play()
-		task.wait(0.8)
-
-		TweenService:Create(img1, TweenInfo.new(4, Enum.EasingStyle.Linear), {
-			Size = UDim2.fromScale(1.1, 1.1),
-			Position = UDim2.fromScale(-0.05, -0.05),
-		}):Play()
-
-		task.wait(1.5)
-
-		TweenService:Create(title, TweenInfo.new(1.0, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { TextTransparency = 0 }):Play()
-		task.wait(0.3)
-		TweenService:Create(redLine, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Size = UDim2.new(0.4, 0, 0, 2) }):Play()
-		task.wait(0.4)
-		TweenService:Create(subtitle, TweenInfo.new(1.0, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { TextTransparency = 0.1 }):Play()
-
-		task.wait(2.0)
-
-		TweenService:Create(img1, TweenInfo.new(1.5, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { ImageTransparency = 1 }):Play()
-		TweenService:Create(title, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { TextTransparency = 1 }):Play()
-		TweenService:Create(subtitle, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { TextTransparency = 1 }):Play()
-		TweenService:Create(redLine, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Size = UDim2.new(0, 0, 0, 2) }):Play()
-		task.wait(0.8)
-
-		TweenService:Create(img2, TweenInfo.new(1.5, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { ImageTransparency = 0.1 }):Play()
-		task.wait(0.5)
-
-		TweenService:Create(img2, TweenInfo.new(3, Enum.EasingStyle.Linear), {
-			Size = UDim2.fromScale(1.15, 1.15),
-			Position = UDim2.fromScale(-0.075, -0.075),
-		}):Play()
-
-		local title2 = Instance.new("TextLabel")
-		title2.Name = "Title2"
-		title2.Size = UDim2.fromScale(0.8, 0.2)
-		title2.Position = UDim2.fromScale(0.1, 0.38)
-		title2.BackgroundTransparency = 1
-		title2.Text = "MONSTER"
-		title2.TextColor3 = Color3.fromRGB(180, 0, 0)
-		title2.TextTransparency = 1
-		title2.TextScaled = true
-		title2.Font = Enum.Font.GothamBlack
-		title2.ZIndex = 10
-		title2.Parent = bg
-
-		local stroke = Instance.new("UIStroke")
-		stroke.Thickness = 2
-		stroke.Color = Color3.fromRGB(50, 0, 0)
-		stroke.Transparency = 0.5
-		stroke.Parent = title2
-
-		task.wait(0.5)
-		TweenService:Create(title2, TweenInfo.new(1.0, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { TextTransparency = 0 }):Play()
-
-		task.wait(2.5)
-
-		TweenService:Create(img2, TweenInfo.new(1.5, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { ImageTransparency = 1 }):Play()
-		TweenService:Create(title2, TweenInfo.new(1.0, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { TextTransparency = 1 }):Play()
-		task.wait(1.5)
-
-		TweenService:Create(bg, TweenInfo.new(2.0, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 1 }):Play()
-		task.wait(2.2)
-
-		introGui:Destroy()
-	end)
-	if not ok then warn("[MONSTER] Intro error: " .. tostring(err)) end
-end)
-
--- ---- Step 8: Fonts ----
-task.defer(function()
+-- ---- Fonts: heavier headings
+task.spawn(function()
 	local F = B.F
 	if not F then return end
-	local ok, gothic = pcall(Font.fromName, "BuilderExtended", Enum.FontWeight.Bold)
-	local ok2, gothicHeavy = pcall(Font.fromName, "BuilderExtended", Enum.FontWeight.Heavy)
+	local ok, bold = pcall(Font.fromName, "BuilderExtended", Enum.FontWeight.Bold)
+	local ok2, heavy = pcall(Font.fromName, "BuilderExtended", Enum.FontWeight.Heavy)
 	if ok then
-		F.text600 = gothic
-		if ok2 then F.text700 = gothicHeavy end
+		F.text600 = bold
+		if ok2 then F.text700 = heavy end
 	end
 	if UI and UI.sweepFonts then
 		task.wait(0.3)
@@ -322,134 +181,68 @@ task.defer(function()
 	end
 end)
 
--- ---- Step 9: Decorative overlays ----
-task.defer(function()
+-- ---- The window: edge vignette, a breathing blood line on top, a heavier shadow below
+task.spawn(function()
 	local stage = GUI:FindFirstChild("Stage", true)
 	local windowFrame = stage and stage:FindFirstChild("Window")
-	if not windowFrame then
-		for _, child in ipairs(GUI:GetDescendants()) do
-			if child:IsA("Frame") and child.Name == "Window" then
-				windowFrame = child
-				break
-			end
-		end
-	end
 	if not windowFrame then return end
 
-	local vignetteFrame = Instance.new("Frame")
-	vignetteFrame.Name = "MonsterVignette"
-	vignetteFrame.Size = UDim2.fromScale(1, 1)
-	vignetteFrame.Position = UDim2.fromScale(0, 0)
-	vignetteFrame.BackgroundColor3 = Color3.fromRGB(8, 0, 0)
-	vignetteFrame.BackgroundTransparency = 0.88
-	vignetteFrame.BorderSizePixel = 0
-	vignetteFrame.ZIndex = 900
-
-	local gradient = Instance.new("UIGradient")
-	gradient.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0),
-		NumberSequenceKeypoint.new(0.3, 0.85),
-		NumberSequenceKeypoint.new(0.7, 0.85),
-		NumberSequenceKeypoint.new(1, 0),
-	})
-	gradient.Rotation = 90
-	gradient.Parent = vignetteFrame
-	vignetteFrame.Parent = windowFrame
-
-	local bloodLine = Instance.new("Frame")
-	bloodLine.Name = "MonsterBloodLine"
-	bloodLine.Size = UDim2.new(1, 0, 0, 2)
-	bloodLine.Position = UDim2.fromScale(0, 0)
-	bloodLine.BackgroundColor3 = Color3.fromRGB(139, 0, 0)
-	bloodLine.BackgroundTransparency = 0.3
-	bloodLine.BorderSizePixel = 0
-	bloodLine.ZIndex = 950
-	bloodLine.Parent = windowFrame
-
-	local bloodGlow = Instance.new("Frame")
-	bloodGlow.Name = "MonsterBloodGlow"
-	bloodGlow.Size = UDim2.new(1, 0, 0, 12)
-	bloodGlow.Position = UDim2.fromScale(0, 0)
-	bloodGlow.BackgroundColor3 = Color3.fromRGB(139, 0, 0)
-	bloodGlow.BackgroundTransparency = 0.92
-	bloodGlow.BorderSizePixel = 0
-	bloodGlow.ZIndex = 899
-
-	local glowGradient = Instance.new("UIGradient")
-	glowGradient.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0),
-		NumberSequenceKeypoint.new(1, 1),
-	})
-	glowGradient.Rotation = 90
-	glowGradient.Parent = bloodGlow
-	bloodGlow.Parent = windowFrame
-
-	local pulseAlpha = 0
-	local pulseDir = 1
-	local heartbeat = game:GetService("RunService").Heartbeat
-	local pulseConn
-	pulseConn = heartbeat:Connect(function(dt)
-		if not windowFrame.Parent then
-			pulseConn:Disconnect()
-			return
+	local function frame(name, props, gradient)
+		local item = Instance.new("Frame")
+		item.Name = name
+		item.BorderSizePixel = 0
+		for key, value in pairs(props) do item[key] = value end
+		if gradient then
+			local grad = Instance.new("UIGradient")
+			grad.Transparency = NumberSequence.new(gradient)
+			grad.Rotation = 90
+			grad.Parent = item
 		end
-		pulseAlpha = pulseAlpha + dt * 0.4 * pulseDir
-		if pulseAlpha >= 1 then pulseAlpha = 1; pulseDir = -1
-		elseif pulseAlpha <= 0 then pulseAlpha = 0; pulseDir = 1 end
-		local t = (0.15) * (0.5 - 0.5 * math.cos(pulseAlpha * math.pi))
-		bloodLine.BackgroundTransparency = 0.3 - t
-		bloodGlow.BackgroundTransparency = 0.92 - t * 0.5
+		item.Parent = windowFrame
+		return item
+	end
+	local key = NumberSequenceKeypoint.new
+	frame("MonsterVignette", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.fromRGB(8, 0, 0), BackgroundTransparency = 0.88, ZIndex = 900 },
+		{ key(0, 0), key(0.3, 0.85), key(0.7, 0.85), key(1, 0) })
+	local line = frame("MonsterBloodLine", { Size = UDim2.new(1, 0, 0, 2), BackgroundColor3 = Color3.fromRGB(139, 0, 0), BackgroundTransparency = 0.3, ZIndex = 950 })
+	local glow = frame("MonsterBloodGlow", { Size = UDim2.new(1, 0, 0, 12), BackgroundColor3 = Color3.fromRGB(139, 0, 0), BackgroundTransparency = 0.92, ZIndex = 899 },
+		{ key(0, 0), key(1, 1) })
+	frame("MonsterShadow", { Size = UDim2.new(1, 0, 0, 20), Position = UDim2.new(0, 0, 1, -20), BackgroundColor3 = Color3.fromRGB(5, 2, 8), BackgroundTransparency = 0.7, ZIndex = 899 },
+		{ key(0, 1), key(1, 0) })
+
+	local phase, direction = 0, 1
+	local pulse
+	pulse = RunService.Heartbeat:Connect(function(dt)
+		if not windowFrame.Parent then pulse:Disconnect(); return end
+		phase = phase + dt * 0.4 * direction
+		if phase >= 1 then phase, direction = 1, -1 elseif phase <= 0 then phase, direction = 0, 1 end
+		local t = 0.15 * (0.5 - 0.5 * math.cos(phase * math.pi))
+		line.BackgroundTransparency = 0.3 - t
+		glow.BackgroundTransparency = 0.92 - t * 0.5
 	end)
-
-	local bottomShadow = Instance.new("Frame")
-	bottomShadow.Name = "MonsterShadow"
-	bottomShadow.Size = UDim2.new(1, 0, 0, 20)
-	bottomShadow.Position = UDim2.new(0, 0, 1, -20)
-	bottomShadow.BackgroundColor3 = Color3.fromRGB(5, 2, 8)
-	bottomShadow.BackgroundTransparency = 0.7
-	bottomShadow.BorderSizePixel = 0
-	bottomShadow.ZIndex = 899
-
-	local bottomGrad = Instance.new("UIGradient")
-	bottomGrad.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 1),
-		NumberSequenceKeypoint.new(1, 0),
-	})
-	bottomGrad.Rotation = 90
-	bottomGrad.Parent = bottomShadow
-	bottomShadow.Parent = windowFrame
 end)
 
--- ---- Step 10: Cleanup on unload ----
-local origUnload = B.unload
-if origUnload then
+-- ---- Unload: nothing of MONSTER's is left behind
+local unload = B.unload
+if unload then
 	B.unload = function(...)
+		renamer:Disconnect()
 		pcall(function()
-			for _, child in ipairs(GUI:GetDescendants()) do
-				if string.sub(child.Name, 1, 7) == "Monster" then
-					child:Destroy()
-				end
+			for _, item in ipairs(GUI:GetDescendants()) do
+				if string.sub(item.Name, 1, 7) == "Monster" then item:Destroy() end
 			end
-			local introGui = gethui():FindFirstChild("MonsterIntro")
-			if introGui then introGui:Destroy() end
 		end)
-		if Theme.schemes.monster then
-			Theme.schemes.monster = nil
-		end
-		return origUnload(...)
+		Theme.schemes.monster = nil
+		return unload(...)
 	end
 end
 
--- ---- Done ----
-task.defer(function()
-	task.wait(1)
+task.spawn(function()
+	while Loader and Loader.active do task.wait(0.2) end
+	task.wait(0.6)
 	if B.Toast and B.Toast.note then
-		B.Toast.note({
-			icon = "skull",
-			text = "MONSTER loaded",
-			sub = "Dark crimson \194\183 Gothic \194\183 Atmospheric",
-		})
+		B.Toast.note({ icon = "skull", text = "MONSTER loaded", sub = "Dark crimson \194\183 Gothic \194\183 Atmospheric" })
 	end
 end)
 
-warn("[MONSTER] v2 reskin applied: scheme=monster, accent=crimson, hero=damon, intro=cinematic")
+warn("[MONSTER] v3 loaded: intro=" .. tostring(introReady) .. " board=" .. tostring(boardReady) .. " caught=" .. tostring(caught))
