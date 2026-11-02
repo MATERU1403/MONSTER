@@ -74,6 +74,9 @@ T.ok   = hex("3D8B37")
 T.warn = hex("C9842A")
 T.bad  = hex("DC143C")
 
+-- BasedHub's own brand film would play before ours; this persists in prefs
+pcall(Config.set, "app.intro", "off")
+
 -- ---- Step 5: REBRAND all "BASED" text to "MONSTER" ----
 local function replaceAllBased(parent)
 	for _, child in ipairs(parent:GetDescendants()) do
