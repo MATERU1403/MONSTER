@@ -78,39 +78,22 @@ T.bad  = hex("DC143C")
 pcall(Config.set, "app.intro", "off")
 
 -- ---- Step 5: REBRAND all "BASED" text to "MONSTER" ----
-local function replaceAllBased(parent)
-	for _, child in ipairs(parent:GetDescendants()) do
-		if child:IsA("TextLabel") or child:IsA("TextButton") then
-			if child.Text == "BASED" then
-				child.Text = "MONSTER"
-			end
-		end
-	end
+-- BasedHub redraws some labels (e.g. the Menu style dropdown) after boot, so
+-- each renamed label keeps a watcher that renames it again.
+local watched = setmetatable({}, { __mode = "k" })
+
+local function rebrand(label)
+	if not (label:IsA("TextLabel") or label:IsA("TextButton")) or label.Text ~= "BASED" then return end
+	label.Text = "MONSTER"
+	if watched[label] then return end
+	watched[label] = true
+	label:GetPropertyChangedSignal("Text"):Connect(function()
+		if label.Text == "BASED" then label.Text = "MONSTER" end
+	end)
 end
 
-replaceAllBased(GUI)
-
-if Window.eyebrow then
-	if Window.eyebrow.Text == "BASED" or Window.eyebrow.Text == "MAKE IT YOURS" then
-		Window.eyebrow.Text = "MONSTER"
-	end
-end
-
-local origSetPage = Window.setPage
-if origSetPage then
-	Window.setPage = function(...)
-		local result = origSetPage(...)
-		task.defer(function()
-			if Window.eyebrow then
-				if Window.eyebrow.Text == "BASED" then
-					Window.eyebrow.Text = "MONSTER"
-				end
-			end
-			replaceAllBased(GUI)
-		end)
-		return result
-	end
-end
+for _, d in ipairs(GUI:GetDescendants()) do rebrand(d) end
+GUI.DescendantAdded:Connect(function(d) task.defer(rebrand, d) end)
 
 -- ---- Step 6: Download cinematic image and set home hero ----
 task.defer(function()
