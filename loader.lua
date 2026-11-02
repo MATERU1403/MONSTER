@@ -1,11 +1,10 @@
 -- ============================================================================
---  MONSTER Hub Loader
+--  MONSTER Hub Loader v2
 --
 --  Loads BasedHub, then skins it as MONSTER: dark crimson theme, gothic fonts,
---  atmospheric overlays, and rebranded UI. All visuals, no layout changes.
+--  atmospheric overlays, rebranded UI, custom cinematic, and MONSTER intro.
 --
---  Usage: execute this file in your executor. It loads BasedHub from GitHub,
---  waits for it to initialise, then applies the MONSTER reskin on top.
+--  Usage: execute this file in your executor.
 -- ============================================================================
 
 -- ---- Step 1: Load BasedHub ----
@@ -21,7 +20,6 @@ end
 local B = genv.BASED
 if not B then warn("[MONSTER] BASED hub did not load"); return end
 
--- wait for the window to build
 local tries = 0
 while not B.Window or not B.Window.built do
 	task.wait(0.25)
@@ -30,7 +28,7 @@ while not B.Window or not B.Window.built do
 end
 task.wait(0.5)
 
--- ---- Step 3: MONSTER Visual Reskin ----
+-- ---- Step 3: Grab references ----
 local Theme = B.Theme
 local T = B.T
 local UI = B.UI
@@ -39,7 +37,13 @@ local Config = B.Config
 local util = B.util
 local hex = util.hex
 
--- ========================= COLOUR SCHEME =================================
+local GUI = Window.gui
+if not GUI then
+	warn("[MONSTER] Window.gui is nil, cannot reskin")
+	return
+end
+
+-- ---- Step 4: MONSTER colour scheme ----
 Theme.schemes.monster = {
 	label = "Monster",
 	base  = hex("050208"),
@@ -70,21 +74,23 @@ T.ok   = hex("3D8B37")
 T.warn = hex("C9842A")
 T.bad  = hex("DC143C")
 
--- ========================= REBRAND =======================================
-local function replaceText(parent, target, replacement)
+-- ---- Step 5: REBRAND all "BASED" text to "MONSTER" ----
+local function replaceAllBased(parent)
 	for _, child in ipairs(parent:GetDescendants()) do
-		if (child:IsA("TextLabel") or child:IsA("TextButton")) and child.Text == target then
-			child.Text = replacement
+		if child:IsA("TextLabel") or child:IsA("TextButton") then
+			if child.Text == "BASED" then
+				child.Text = "MONSTER"
+			end
 		end
 	end
 end
 
-if B.gui then
-	replaceText(B.gui, "BASED", "MONSTER")
-end
+replaceAllBased(GUI)
 
 if Window.eyebrow then
-	Window.eyebrow.Text = "MONSTER"
+	if Window.eyebrow.Text == "BASED" or Window.eyebrow.Text == "MAKE IT YOURS" then
+		Window.eyebrow.Text = "MONSTER"
+	end
 end
 
 local origSetPage = Window.setPage
@@ -92,15 +98,229 @@ if origSetPage then
 	Window.setPage = function(...)
 		local result = origSetPage(...)
 		task.defer(function()
-			if Window.eyebrow and Window.eyebrow.Text == "BASED" then
-				Window.eyebrow.Text = "MONSTER"
+			if Window.eyebrow then
+				if Window.eyebrow.Text == "BASED" then
+					Window.eyebrow.Text = "MONSTER"
+				end
 			end
+			replaceAllBased(GUI)
 		end)
 		return result
 	end
 end
 
--- ========================= FONTS =========================================
+-- ---- Step 6: Download cinematic image and set home hero ----
+task.defer(function()
+	local ok, err = pcall(function()
+		local imgUrl = "https://raw.githubusercontent.com/MATERU1403/MONSTER/main/cinematic/damon_dark.jpg"
+		local imgData = game:HttpGet(imgUrl)
+		if not imgData or #imgData < 100 then
+			warn("[MONSTER] Failed to download cinematic image")
+			return
+		end
+
+		local fileName = "monster_hero.jpg"
+		writefile(fileName, imgData)
+		local contentId = getcustomasset(fileName)
+
+		local function findHeroStill(parent)
+			for _, desc in ipairs(parent:GetDescendants()) do
+				if desc:IsA("ImageLabel") and desc.Name == "Still" then
+					local hero = desc.Parent
+					if hero and hero.Name == "Hero" then
+						return desc
+					end
+				end
+			end
+			return nil
+		end
+
+		local still = findHeroStill(GUI)
+		if still then
+			still.Image = contentId
+			still.ScaleType = Enum.ScaleType.Crop
+			still.ImageTransparency = 0
+		else
+			for _, page in ipairs(GUI:GetDescendants()) do
+				if page.Name == "home" and (page:IsA("Frame") or page:IsA("ScrollingFrame")) then
+					for _, d in ipairs(page:GetDescendants()) do
+						if d:IsA("ImageLabel") and d.Name == "Still" then
+							d.Image = contentId
+							d.ScaleType = Enum.ScaleType.Crop
+							d.ImageTransparency = 0
+							break
+						end
+					end
+					break
+				end
+			end
+		end
+	end)
+	if not ok then warn("[MONSTER] Hero image error: " .. tostring(err)) end
+end)
+
+-- ---- Step 7: Custom MONSTER intro overlay ----
+task.defer(function()
+	local ok, err = pcall(function()
+		local imgUrl1 = "https://raw.githubusercontent.com/MATERU1403/MONSTER/main/cinematic/damon_dark.jpg"
+		local imgUrl2 = "https://raw.githubusercontent.com/MATERU1403/MONSTER/main/cinematic/skull_dark.jpg"
+
+		local data1 = game:HttpGet(imgUrl1)
+		local data2 = game:HttpGet(imgUrl2)
+
+		writefile("monster_intro_1.jpg", data1)
+		writefile("monster_intro_2.jpg", data2)
+		local asset1 = getcustomasset("monster_intro_1.jpg")
+		local asset2 = getcustomasset("monster_intro_2.jpg")
+
+		local TweenService = game:GetService("TweenService")
+
+		local introGui = Instance.new("ScreenGui")
+		introGui.Name = "MonsterIntro"
+		introGui.DisplayOrder = 99999
+		introGui.IgnoreGuiInset = true
+		introGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+		introGui.Parent = gethui()
+
+		local bg = Instance.new("Frame")
+		bg.Name = "BG"
+		bg.Size = UDim2.fromScale(1, 1)
+		bg.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+		bg.BackgroundTransparency = 0
+		bg.BorderSizePixel = 0
+		bg.ZIndex = 1
+		bg.Parent = introGui
+
+		local img1 = Instance.new("ImageLabel")
+		img1.Name = "Frame1"
+		img1.Size = UDim2.fromScale(1, 1)
+		img1.Position = UDim2.fromScale(0, 0)
+		img1.BackgroundTransparency = 1
+		img1.Image = asset1
+		img1.ScaleType = Enum.ScaleType.Crop
+		img1.ImageTransparency = 1
+		img1.ZIndex = 2
+		img1.Parent = bg
+
+		local img2 = Instance.new("ImageLabel")
+		img2.Name = "Frame2"
+		img2.Size = UDim2.fromScale(1, 1)
+		img2.Position = UDim2.fromScale(0, 0)
+		img2.BackgroundTransparency = 1
+		img2.Image = asset2
+		img2.ScaleType = Enum.ScaleType.Crop
+		img2.ImageTransparency = 1
+		img2.ZIndex = 3
+		img2.Parent = bg
+
+		local title = Instance.new("TextLabel")
+		title.Name = "Title"
+		title.Size = UDim2.fromScale(0.8, 0.15)
+		title.Position = UDim2.fromScale(0.1, 0.4)
+		title.BackgroundTransparency = 1
+		title.Text = "MONSTER"
+		title.TextColor3 = Color3.fromRGB(139, 0, 0)
+		title.TextTransparency = 1
+		title.TextScaled = true
+		title.Font = Enum.Font.GothamBlack
+		title.ZIndex = 10
+		title.Parent = bg
+
+		local subtitle = Instance.new("TextLabel")
+		subtitle.Name = "Sub"
+		subtitle.Size = UDim2.fromScale(0.6, 0.06)
+		subtitle.Position = UDim2.fromScale(0.2, 0.56)
+		subtitle.BackgroundTransparency = 1
+		subtitle.Text = "THE DARKNESS AWAKENS"
+		subtitle.TextColor3 = Color3.fromRGB(200, 180, 160)
+		subtitle.TextTransparency = 1
+		subtitle.TextScaled = true
+		subtitle.Font = Enum.Font.Gotham
+		subtitle.ZIndex = 10
+		subtitle.Parent = bg
+
+		local redLine = Instance.new("Frame")
+		redLine.Name = "RedLine"
+		redLine.Size = UDim2.new(0, 0, 0, 2)
+		redLine.Position = UDim2.fromScale(0.5, 0.54)
+		redLine.AnchorPoint = Vector2.new(0.5, 0.5)
+		redLine.BackgroundColor3 = Color3.fromRGB(139, 0, 0)
+		redLine.BackgroundTransparency = 0.3
+		redLine.BorderSizePixel = 0
+		redLine.ZIndex = 10
+		redLine.Parent = bg
+
+		task.wait(0.3)
+
+		TweenService:Create(img1, TweenInfo.new(1.5, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { ImageTransparency = 0 }):Play()
+		task.wait(0.8)
+
+		TweenService:Create(img1, TweenInfo.new(4, Enum.EasingStyle.Linear), {
+			Size = UDim2.fromScale(1.1, 1.1),
+			Position = UDim2.fromScale(-0.05, -0.05),
+		}):Play()
+
+		task.wait(1.5)
+
+		TweenService:Create(title, TweenInfo.new(1.0, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { TextTransparency = 0 }):Play()
+		task.wait(0.3)
+		TweenService:Create(redLine, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Size = UDim2.new(0.4, 0, 0, 2) }):Play()
+		task.wait(0.4)
+		TweenService:Create(subtitle, TweenInfo.new(1.0, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { TextTransparency = 0.1 }):Play()
+
+		task.wait(2.0)
+
+		TweenService:Create(img1, TweenInfo.new(1.5, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { ImageTransparency = 1 }):Play()
+		TweenService:Create(title, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { TextTransparency = 1 }):Play()
+		TweenService:Create(subtitle, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { TextTransparency = 1 }):Play()
+		TweenService:Create(redLine, TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Size = UDim2.new(0, 0, 0, 2) }):Play()
+		task.wait(0.8)
+
+		TweenService:Create(img2, TweenInfo.new(1.5, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { ImageTransparency = 0.1 }):Play()
+		task.wait(0.5)
+
+		TweenService:Create(img2, TweenInfo.new(3, Enum.EasingStyle.Linear), {
+			Size = UDim2.fromScale(1.15, 1.15),
+			Position = UDim2.fromScale(-0.075, -0.075),
+		}):Play()
+
+		local title2 = Instance.new("TextLabel")
+		title2.Name = "Title2"
+		title2.Size = UDim2.fromScale(0.8, 0.2)
+		title2.Position = UDim2.fromScale(0.1, 0.38)
+		title2.BackgroundTransparency = 1
+		title2.Text = "MONSTER"
+		title2.TextColor3 = Color3.fromRGB(180, 0, 0)
+		title2.TextTransparency = 1
+		title2.TextScaled = true
+		title2.Font = Enum.Font.GothamBlack
+		title2.ZIndex = 10
+		title2.Parent = bg
+
+		local stroke = Instance.new("UIStroke")
+		stroke.Thickness = 2
+		stroke.Color = Color3.fromRGB(50, 0, 0)
+		stroke.Transparency = 0.5
+		stroke.Parent = title2
+
+		task.wait(0.5)
+		TweenService:Create(title2, TweenInfo.new(1.0, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { TextTransparency = 0 }):Play()
+
+		task.wait(2.5)
+
+		TweenService:Create(img2, TweenInfo.new(1.5, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { ImageTransparency = 1 }):Play()
+		TweenService:Create(title2, TweenInfo.new(1.0, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), { TextTransparency = 1 }):Play()
+		task.wait(1.5)
+
+		TweenService:Create(bg, TweenInfo.new(2.0, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 1 }):Play()
+		task.wait(2.2)
+
+		introGui:Destroy()
+	end)
+	if not ok then warn("[MONSTER] Intro error: " .. tostring(err)) end
+end)
+
+-- ---- Step 8: Fonts ----
 task.defer(function()
 	local F = B.F
 	if not F then return end
@@ -116,21 +336,13 @@ task.defer(function()
 	end
 end)
 
--- ========================= DECORATIVE OVERLAYS ===========================
+-- ---- Step 9: Decorative overlays ----
 task.defer(function()
-	local gui = B.gui
-	if not gui then return end
-
-	local windowFrame
-	for _, child in ipairs(gui:GetChildren()) do
-		if child:IsA("Frame") and child.Name == "Window" then
-			windowFrame = child
-			break
-		end
-	end
+	local stage = GUI:FindFirstChild("Stage", true)
+	local windowFrame = stage and stage:FindFirstChild("Window")
 	if not windowFrame then
-		for _, child in ipairs(gui:GetChildren()) do
-			if child:IsA("Frame") and child.AbsoluteSize.X > 200 and child.AbsoluteSize.Y > 200 then
+		for _, child in ipairs(GUI:GetDescendants()) do
+			if child:IsA("Frame") and child.Name == "Window" then
 				windowFrame = child
 				break
 			end
@@ -138,7 +350,6 @@ task.defer(function()
 	end
 	if not windowFrame then return end
 
-	-- Vignette: subtle edge darkening
 	local vignetteFrame = Instance.new("Frame")
 	vignetteFrame.Name = "MonsterVignette"
 	vignetteFrame.Size = UDim2.fromScale(1, 1)
@@ -159,7 +370,6 @@ task.defer(function()
 	gradient.Parent = vignetteFrame
 	vignetteFrame.Parent = windowFrame
 
-	-- Blood line at top with glow
 	local bloodLine = Instance.new("Frame")
 	bloodLine.Name = "MonsterBloodLine"
 	bloodLine.Size = UDim2.new(1, 0, 0, 2)
@@ -188,13 +398,8 @@ task.defer(function()
 	glowGradient.Parent = bloodGlow
 	bloodGlow.Parent = windowFrame
 
-	-- Breathing pulse on the blood accent
 	local pulseAlpha = 0
 	local pulseDir = 1
-	local PULSE_SPEED = 0.4
-	local PULSE_MIN = 0.0
-	local PULSE_MAX = 0.15
-
 	local heartbeat = game:GetService("RunService").Heartbeat
 	local pulseConn
 	pulseConn = heartbeat:Connect(function(dt)
@@ -202,15 +407,14 @@ task.defer(function()
 			pulseConn:Disconnect()
 			return
 		end
-		pulseAlpha = pulseAlpha + dt * PULSE_SPEED * pulseDir
+		pulseAlpha = pulseAlpha + dt * 0.4 * pulseDir
 		if pulseAlpha >= 1 then pulseAlpha = 1; pulseDir = -1
 		elseif pulseAlpha <= 0 then pulseAlpha = 0; pulseDir = 1 end
-		local t = PULSE_MIN + (PULSE_MAX - PULSE_MIN) * (0.5 - 0.5 * math.cos(pulseAlpha * math.pi))
+		local t = (0.15) * (0.5 - 0.5 * math.cos(pulseAlpha * math.pi))
 		bloodLine.BackgroundTransparency = 0.3 - t
 		bloodGlow.BackgroundTransparency = 0.92 - t * 0.5
 	end)
 
-	-- Bottom shadow
 	local bottomShadow = Instance.new("Frame")
 	bottomShadow.Name = "MonsterShadow"
 	bottomShadow.Size = UDim2.new(1, 0, 0, 20)
@@ -230,19 +434,18 @@ task.defer(function()
 	bottomShadow.Parent = windowFrame
 end)
 
--- ========================= CLEANUP ON UNLOAD =============================
+-- ---- Step 10: Cleanup on unload ----
 local origUnload = B.unload
 if origUnload then
 	B.unload = function(...)
 		pcall(function()
-			local gui = B.gui
-			if gui then
-				for _, child in ipairs(gui:GetDescendants()) do
-					if string.sub(child.Name, 1, 7) == "Monster" then
-						child:Destroy()
-					end
+			for _, child in ipairs(GUI:GetDescendants()) do
+				if string.sub(child.Name, 1, 7) == "Monster" then
+					child:Destroy()
 				end
 			end
+			local introGui = gethui():FindFirstChild("MonsterIntro")
+			if introGui then introGui:Destroy() end
 		end)
 		if Theme.schemes.monster then
 			Theme.schemes.monster = nil
@@ -251,7 +454,7 @@ if origUnload then
 	end
 end
 
--- ========================= DONE ==========================================
+-- ---- Done ----
 task.defer(function()
 	task.wait(1)
 	if B.Toast and B.Toast.note then
@@ -263,4 +466,4 @@ task.defer(function()
 	end
 end)
 
-warn("[MONSTER] Visual reskin applied: scheme=monster, accent=crimson")
+warn("[MONSTER] v2 reskin applied: scheme=monster, accent=crimson, hero=damon, intro=cinematic")
