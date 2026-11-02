@@ -238,8 +238,8 @@ task.spawn(function()
 	end
 end)
 
--- ---- The window: darkened blood-red edges, a rim that beats like a heart, blood running
--- from the top edge and dripping off, and a red fog low down. Nothing here takes a click.
+-- ---- The window: a rim that beats like a heart and blood running from the top edge and
+-- dripping off. Nothing lies over the window's contents, and nothing here takes a click.
 task.spawn(function()
 	local stage = GUI:FindFirstChild("Stage", true)
 	local windowFrame = stage and stage:FindFirstChild("Window")
@@ -268,12 +268,7 @@ task.spawn(function()
 		corner.CornerRadius = radius or UDim.new(1, 0)
 		corner.Parent = item
 	end
-	local BLOOD, DRIED = Color3.fromRGB(150, 0, 18), Color3.fromRGB(26, 0, 3)
-	local edges = { key(0, 0.42), key(0.22, 1), key(0.78, 1), key(1, 0.42) }
-	frame("MonsterShadeY", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = DRIED, ZIndex = 900 }, edges, 90)
-	frame("MonsterShadeX", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = DRIED, ZIndex = 900 }, edges, 0)
-	local fog = frame("MonsterFog", { Size = UDim2.fromScale(1, 0.26), Position = UDim2.fromScale(0, 0.74), BackgroundColor3 = Color3.fromRGB(70, 0, 10), ZIndex = 901 },
-		{ key(0, 1), key(1, 0.62) })
+	local BLOOD = Color3.fromRGB(150, 0, 18)
 
 	local rim = frame("MonsterRim", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, ZIndex = 952 })
 	round(rim, rootCorner and rootCorner.CornerRadius or UDim.new(0, 18))
@@ -284,7 +279,6 @@ task.spawn(function()
 	rimStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 	rimStroke.Parent = rim
 	local line = frame("MonsterBloodLine", { Size = UDim2.new(0.94, 0, 0, 2), Position = UDim2.fromScale(0.03, 0), BackgroundColor3 = BLOOD, BackgroundTransparency = 0.3, ZIndex = 951 })
-	local glow = frame("MonsterBloodGlow", { Size = UDim2.new(1, 0, 0, 26), BackgroundColor3 = BLOOD, BackgroundTransparency = 0.82, ZIndex = 899 }, { key(0, 0), key(1, 1) })
 
 	-- the drips: each runs down from the top edge, swells, lets a drop go, and runs again
 	local rng = Random.new()
@@ -317,8 +311,6 @@ task.spawn(function()
 		local heart = math.exp(-(p / 0.075) ^ 2) + 0.65 * math.exp(-((p - 0.24) / 0.075) ^ 2)
 		rimStroke.Transparency = 0.72 - 0.5 * heart
 		line.BackgroundTransparency = 0.38 - 0.3 * heart
-		glow.BackgroundTransparency = 0.86 - 0.12 * heart
-		fog.BackgroundTransparency = 0.04 * math.sin(clock * 0.9)
 		for _, d in ipairs(drips) do
 			if d.rest > 0 then
 				d.rest = d.rest - dt
