@@ -24,7 +24,7 @@ local function film(folder, tag, fps, count)
 		},
 	}
 end
-local INTRO = film("monster", "mon1", 60, 1596)
+local INTRO = film("monster", "mon1", 60, 1686)
 local BOARD = film("monsterboard", "mob1", 30, 496)
 
 local function onDisk(path)
@@ -33,34 +33,73 @@ local function onDisk(path)
 end
 local introOnDisk = onDisk("monster/hd/mon1_h_0000.jpg")
 
--- ---- The name: every BasedHub label that carries it reads MONSTER, from the loading screen on.
--- BasedHub redraws some of them (the dropdowns), so each one keeps a watch on its own text.
-local NAMES = { ["BASED"] = "MONSTER", ["BASED HUB"] = "MONSTER" }
-if introOnDisk then NAMES["BASED brand film"] = "MONSTER" end
-local watched = setmetatable({}, { __mode = "k" })
+-- ---- The name: BASED reads MONSTER in every word BasedHub shows, from the loading screen on.
+-- Its text changes as it is used (dropdowns, tips, toasts), so every label keeps a watch on its own.
+local WHOLE = { ["BASED HUB"] = "MONSTER" }
+if introOnDisk then WHOLE["BASED brand film"] = "MONSTER" end
+local function renamed(text)
+	local whole = WHOLE[text]
+	if whole then return whole end
+	if not string.find(text, "BASED", 1, true) then return nil end
+	return (string.gsub(string.gsub(text, "BASED HUB", "MONSTER"), "BASED", "MONSTER"))
+end
 
+-- the wordmark (the name with "hub" beside it): dripping letters in blood
+local styled = setmetatable({}, { __mode = "k" })
+local function bloodName(label)
+	if styled[label] then return end
+	styled[label] = true
+	local ok, creepster = pcall(Font.fromEnum, Enum.Font.Creepster)
+	if ok then
+		label.FontFace = creepster
+		local B = genv.BASED
+		if B and B.UI and B.UI.fontKey then B.UI.fontKey[label] = nil end   -- (the hub's font sweeps leave it be)
+	end
+	if label.TextSize >= 15 and label.TextSize < 22 then label.TextSize = 22 end   -- (the sidebar's: its letters are thin)
+	local blood = Instance.new("UIGradient")
+	blood.Name = "MonsterBlood"
+	blood.Color = ColorSequence.new(Color3.fromRGB(255, 96, 96), Color3.fromRGB(205, 0, 26))
+	blood.Rotation = 90
+	blood.Parent = label
+	local edge = Instance.new("UIStroke")
+	edge.Name = "MonsterEdge"
+	edge.Color = Color3.fromRGB(45, 0, 4)
+	edge.Thickness = 1
+	edge.Transparency = 0.3
+	edge.Parent = label
+end
 local function dropHub(nameLabel)
 	local parent = nameLabel.Parent
 	if not parent then return end
 	for _, sibling in ipairs(parent:GetChildren()) do
-		if sibling:IsA("TextLabel") and sibling.Text == "hub" then sibling.Visible = false end
+		if sibling:IsA("TextLabel") and sibling.Text == "hub" then
+			sibling.Visible = false
+			bloodName(nameLabel)
+		end
 	end
 end
 local function fix(label)
-	local to = NAMES[label.Text]
-	if to then label.Text = to end
+	local to = renamed(label.Text)
+	if to and to ~= label.Text then label.Text = to end
 	if label.Text == "MONSTER" then dropHub(label) end
 end
+local watched = setmetatable({}, { __mode = "k" })
 local function watch(item)
 	if watched[item] or not (item:IsA("TextLabel") or item:IsA("TextButton")) then return end
-	local parent = item.Parent
-	if not (NAMES[item.Text] or (parent and parent.Name == "Select")) then return end
 	watched[item] = true
 	fix(item)
 	item:GetPropertyChangedSignal("Text"):Connect(function() fix(item) end)
 end
-local renamer = host.DescendantAdded:Connect(function(item)
-	if item:IsA("TextLabel") or item:IsA("TextButton") then task.defer(watch, item) end
+-- BasedHub's screens (and its loading screen) are the ones made under the hidden UI from now on
+local adopted = {}
+local renamer = host.ChildAdded:Connect(function(child)
+	task.defer(function()
+		if not child:IsA("LayerCollector") then return end
+		for _, item in ipairs(child:GetDescendants()) do watch(item) end
+		adopted[#adopted + 1] = child.DescendantAdded:Connect(function(item)
+			if item:IsA("TextLabel") or item:IsA("TextButton") then task.defer(watch, item) end
+		end)
+	end)
 end)
 
 -- ---- BasedHub. Its own launch intro is held off for this one launch: the MONSTER one takes its place.
@@ -125,30 +164,35 @@ if run and not played then
 	end
 end
 
--- ---- Colour: pitch-black base, bone ink, blood-red accent
+-- ---- Colour: black with blood under it, bone ink, fresh blood for every accent
 Theme.schemes.monster = {
 	label = "Monster",
-	base  = hex("050208"),
-	ink   = hex("E8E0D4"),
-	sub   = hex("8B7E72"),
-	faint = hex("4A3F3A"),
-	shadow = 0.25,
+	base  = hex("070103"),
+	ink   = hex("EDE3DA"),
+	sub   = hex("A98D87"),
+	faint = hex("74494C"),
+	shadow = 0.32,
 	fill   = { 0.06, 0.10, 0.15 },
 	stroke = { 0.12, 0.22 },
 	dark   = true,
 }
 table.insert(Theme.schemeOrder, "monster")
-table.insert(Theme.accents, 1, { id = "crimson", label = "Crimson", color = hex("8B0000") })
-Theme.set({ scheme = "monster", accent = hex("8B0000"), glass = 0.85, radius = 0.8 })
-T.ok   = hex("3D8B37")
+table.insert(Theme.accents, 1, { id = "blood", label = "Blood", color = hex("B0001E") })
+Theme.set({ scheme = "monster", accent = hex("B0001E"), glass = 0.9, radius = 0.8 })
+T.ok   = hex("4E8A3E")
 T.warn = hex("C9842A")
-T.bad  = hex("DC143C")
+T.bad  = hex("E0142E")
 
--- ---- Home: the card's still is the Salvatore film's own opening frame (shown until the film runs)
+-- ---- Home: the card's still is a frame of the Salvatore film (shown until the film runs).
+-- The Home tab is built a little after BasedHub is up, so it is waited for.
 task.spawn(function()
 	local still
-	for _, item in ipairs(GUI:GetDescendants()) do
-		if item.Name == "Still" and item:IsA("ImageLabel") and item.Parent and item.Parent.Name == "Hero" then still = item; break end
+	local giveUp = os.clock() + 30
+	while not still and os.clock() < giveUp and GUI.Parent do
+		for _, item in ipairs(GUI:GetDescendants()) do
+			if item.Name == "Still" and item:IsA("ImageLabel") and item.Parent and item.Parent.Name == "Hero" then still = item; break end
+		end
+		if not still then task.wait(0.5) end
 	end
 	if not still then return end
 	local id = boardReady and B.Assets.id("monsterboard/mob1_still.jpg")
@@ -162,63 +206,143 @@ task.spawn(function()
 	if id then
 		still.Image = id
 		still.ScaleType = Enum.ScaleType.Crop
+		still:GetPropertyChangedSignal("Image"):Connect(function()
+			if still.Image ~= id then still.Image = id end
+		end)
 	end
 end)
 
--- ---- Fonts: heavier headings
+-- ---- Letters: page titles in a blackletter, headings heavier, the wordmark in blood (above)
 task.spawn(function()
-	local F = B.F
+	local F, F0 = B.F, rawget(B, "F0")
 	if not F then return end
-	local ok, bold = pcall(Font.fromName, "BuilderExtended", Enum.FontWeight.Bold)
-	local ok2, heavy = pcall(Font.fromName, "BuilderExtended", Enum.FontWeight.Heavy)
+	local ok, gothic = pcall(Font.fromEnum, Enum.Font.GrenzeGotisch)
 	if ok then
-		F.text600 = bold
-		if ok2 then F.text700 = heavy end
+		local faces = { serifItalic = Font.new(gothic.Family, Enum.FontWeight.Bold), serif = Font.new(gothic.Family, Enum.FontWeight.SemiBold) }
+		for key, face in pairs(faces) do
+			F[key] = face
+			if F0 then F0[key] = face end            -- (kept when the hub's own font setting is changed)
+		end
+		for label, key in pairs(UI.fontKey or {}) do
+			if faces[key] and label.Parent then label.FontFace = faces[key] end
+		end
 	end
-	if UI and UI.sweepFonts then
+	local okBold, bold = pcall(Font.fromName, "BuilderExtended", Enum.FontWeight.Bold)
+	local okHeavy, heavy = pcall(Font.fromName, "BuilderExtended", Enum.FontWeight.Heavy)
+	if okBold then F.text600 = bold end
+	if okHeavy then F.text700 = heavy end
+	if UI.sweepFonts then
 		task.wait(0.3)
 		UI.sweepFonts()
 	end
 end)
 
--- ---- The window: edge vignette, a breathing blood line on top, a heavier shadow below
+-- ---- The window: darkened blood-red edges, a rim that beats like a heart, blood running
+-- from the top edge and dripping off, and a red fog low down. Nothing here takes a click.
 task.spawn(function()
 	local stage = GUI:FindFirstChild("Stage", true)
 	local windowFrame = stage and stage:FindFirstChild("Window")
 	if not windowFrame then return end
+	local root = windowFrame:FindFirstChild("Root")
+	local rootCorner = root and root:FindFirstChildOfClass("UICorner")
 
-	local function frame(name, props, gradient)
+	local key = NumberSequenceKeypoint.new
+	local function frame(name, props, gradient, rotation)
 		local item = Instance.new("Frame")
 		item.Name = name
 		item.BorderSizePixel = 0
-		for key, value in pairs(props) do item[key] = value end
+		item.Active = false
+		for prop, value in pairs(props) do item[prop] = value end
 		if gradient then
 			local grad = Instance.new("UIGradient")
 			grad.Transparency = NumberSequence.new(gradient)
-			grad.Rotation = 90
+			grad.Rotation = rotation or 90
 			grad.Parent = item
 		end
 		item.Parent = windowFrame
 		return item
 	end
-	local key = NumberSequenceKeypoint.new
-	frame("MonsterVignette", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.fromRGB(8, 0, 0), BackgroundTransparency = 0.88, ZIndex = 900 },
-		{ key(0, 0), key(0.3, 0.85), key(0.7, 0.85), key(1, 0) })
-	local line = frame("MonsterBloodLine", { Size = UDim2.new(1, 0, 0, 2), BackgroundColor3 = Color3.fromRGB(139, 0, 0), BackgroundTransparency = 0.3, ZIndex = 950 })
-	local glow = frame("MonsterBloodGlow", { Size = UDim2.new(1, 0, 0, 12), BackgroundColor3 = Color3.fromRGB(139, 0, 0), BackgroundTransparency = 0.92, ZIndex = 899 },
-		{ key(0, 0), key(1, 1) })
-	frame("MonsterShadow", { Size = UDim2.new(1, 0, 0, 20), Position = UDim2.new(0, 0, 1, -20), BackgroundColor3 = Color3.fromRGB(5, 2, 8), BackgroundTransparency = 0.7, ZIndex = 899 },
-		{ key(0, 1), key(1, 0) })
+	local function round(item, radius)
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = radius or UDim.new(1, 0)
+		corner.Parent = item
+	end
+	local BLOOD, DRIED = Color3.fromRGB(150, 0, 18), Color3.fromRGB(26, 0, 3)
+	local edges = { key(0, 0.42), key(0.22, 1), key(0.78, 1), key(1, 0.42) }
+	frame("MonsterShadeY", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = DRIED, ZIndex = 900 }, edges, 90)
+	frame("MonsterShadeX", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = DRIED, ZIndex = 900 }, edges, 0)
+	local fog = frame("MonsterFog", { Size = UDim2.fromScale(1, 0.26), Position = UDim2.fromScale(0, 0.74), BackgroundColor3 = Color3.fromRGB(70, 0, 10), ZIndex = 901 },
+		{ key(0, 1), key(1, 0.62) })
 
-	local phase, direction = 0, 1
-	local pulse
-	pulse = RunService.Heartbeat:Connect(function(dt)
-		if not windowFrame.Parent then pulse:Disconnect(); return end
-		phase = phase + dt * 0.4 * direction
-		if phase >= 1 then phase, direction = 1, -1 elseif phase <= 0 then phase, direction = 0, 1 end
-		local t = 0.15 * (0.5 - 0.5 * math.cos(phase * math.pi))
-		line.BackgroundTransparency = 0.3 - t
-		glow.BackgroundTransparency = 0.92 - t * 0.5
+	local rim = frame("MonsterRim", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, ZIndex = 952 })
+	round(rim, rootCorner and rootCorner.CornerRadius or UDim.new(0, 18))
+	local rimStroke = Instance.new("UIStroke")
+	rimStroke.Color = Color3.fromRGB(175, 0, 24)
+	rimStroke.Thickness = 1.5
+	rimStroke.Transparency = 0.7
+	rimStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	rimStroke.Parent = rim
+	local line = frame("MonsterBloodLine", { Size = UDim2.new(0.94, 0, 0, 2), Position = UDim2.fromScale(0.03, 0), BackgroundColor3 = BLOOD, BackgroundTransparency = 0.3, ZIndex = 951 })
+	local glow = frame("MonsterBloodGlow", { Size = UDim2.new(1, 0, 0, 26), BackgroundColor3 = BLOOD, BackgroundTransparency = 0.82, ZIndex = 899 }, { key(0, 0), key(1, 1) })
+
+	-- the drips: each runs down from the top edge, swells, lets a drop go, and runs again
+	local rng = Random.new()
+	local drips = {}
+	local COUNT = 13
+	for i = 1, COUNT do
+		local x = 0.05 + 0.9 * (i - 0.5 + rng:NextNumber(-0.3, 0.3)) / COUNT
+		local width = rng:NextInteger(2, 5)
+		local body = frame("MonsterDrip", { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(x, 0, 0, 1), Size = UDim2.fromOffset(width, 0),
+			BackgroundColor3 = BLOOD, BackgroundTransparency = 0.12, ZIndex = 953 }, { key(0, 0), key(1, 0.25) })
+		round(body)
+		local tip = frame("MonsterDripTip", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(width + 2, width + 3),
+			BackgroundColor3 = Color3.fromRGB(125, 0, 14), BackgroundTransparency = 0.1, ZIndex = 953 })
+		round(tip)
+		local drop = frame("MonsterDrop", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(width + 1, width + 3),
+			BackgroundColor3 = Color3.fromRGB(125, 0, 14), Visible = false, ZIndex = 953 })
+		round(drop)
+		drips[i] = { body = body, tip = tip, drop = drop, x = x, width = width, len = rng:NextNumber(0, 10), reach = rng:NextNumber(10, 44),
+			speed = rng:NextNumber(1.2, 4.5), rest = rng:NextNumber(0, 5), fall = nil, from = 0 }
+	end
+
+	local clock = 0
+	local loop
+	loop = RunService.Heartbeat:Connect(function(dt)
+		if not windowFrame.Parent then loop:Disconnect(); return end
+		if not Window.open then return end
+		clock = clock + dt
+		-- lub-dub, about 52 a minute
+		local p = clock % 1.15
+		local heart = math.exp(-(p / 0.075) ^ 2) + 0.65 * math.exp(-((p - 0.24) / 0.075) ^ 2)
+		rimStroke.Transparency = 0.72 - 0.5 * heart
+		line.BackgroundTransparency = 0.38 - 0.3 * heart
+		glow.BackgroundTransparency = 0.86 - 0.12 * heart
+		fog.BackgroundTransparency = 0.04 * math.sin(clock * 0.9)
+		for _, d in ipairs(drips) do
+			if d.rest > 0 then
+				d.rest = d.rest - dt
+			elseif d.fall then
+				d.fall = d.fall + dt
+				local y = d.from + 0.5 * 1100 * d.fall * d.fall
+				d.drop.Position = UDim2.new(d.x, 0, 0, y)
+				d.drop.BackgroundTransparency = math.min(1, 0.1 + d.fall / 0.55)
+				if d.fall > 0.55 then
+					d.drop.Visible, d.fall = false, nil
+					d.reach, d.speed, d.rest = rng:NextNumber(10, 44), rng:NextNumber(1.2, 4.5), rng:NextNumber(1.5, 7)
+				end
+			else
+				d.len = math.min(d.reach, d.len + d.speed * dt * (0.35 + d.len / d.reach))
+				if d.len >= d.reach then
+					d.fall, d.from = 0, d.len + 1
+					d.drop.Position = UDim2.new(d.x, 0, 0, d.from)
+					d.drop.Visible = true
+					d.len = d.len * 0.6
+				end
+			end
+			d.body.Size = UDim2.fromOffset(d.width, d.len)
+			d.tip.Position = UDim2.new(d.x, 0, 0, d.len)
+			d.tip.Visible = d.len > 2
+		end
 	end)
 end)
 
@@ -227,6 +351,7 @@ local unload = B.unload
 if unload then
 	B.unload = function(...)
 		renamer:Disconnect()
+		for _, connection in ipairs(adopted) do connection:Disconnect() end
 		pcall(function()
 			for _, item in ipairs(GUI:GetDescendants()) do
 				if string.sub(item.Name, 1, 7) == "Monster" then item:Destroy() end
@@ -241,8 +366,8 @@ task.spawn(function()
 	while Loader and Loader.active do task.wait(0.2) end
 	task.wait(0.6)
 	if B.Toast and B.Toast.note then
-		B.Toast.note({ icon = "skull", text = "MONSTER loaded", sub = "Dark crimson \194\183 Gothic \194\183 Atmospheric" })
+		B.Toast.note({ icon = "skull", text = "MONSTER loaded", sub = "Blood \194\183 Gothic \194\183 Dark" })
 	end
 end)
 
-warn("[MONSTER] v3 loaded: intro=" .. tostring(introReady) .. " board=" .. tostring(boardReady) .. " caught=" .. tostring(caught))
+warn("[MONSTER] v4 loaded: intro=" .. tostring(introReady) .. " board=" .. tostring(boardReady) .. " caught=" .. tostring(caught))

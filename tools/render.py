@@ -37,6 +37,11 @@ def beat(n):
     return BEAT0 + BEAT * n
 
 
+FINAL = beat(48)              # the last downbeat before the song stops (25.498)
+SKULL_END = 25.70             # the skull edit's last frame, in track time
+END = 28.1                    # the fade to black is done by 28.0
+
+
 def reader(path, size, gray=False):
     proc = subprocess.Popen(["ffmpeg", "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "gray" if gray else "bgr24", "-"],
                             stdout=subprocess.PIPE, bufsize=1 << 26)
@@ -170,11 +175,13 @@ def intro_plan():
                (41, 1, 14.53, 14.93), (43, 1, 14.93, 15.30), (44, 1, 15.30, 15.70), (46, 1, 15.73, 16.13)]
     for first, n, a, b in inserts:
         sal.append((beat(first), beat(first + n), a, b, 1.03, 1.0))
-    flashes = [(2.52, 0.35, 0.12), (4.18, 0.55, 0.15), (4.38, 0.7, 0.2), (BEAT0, 1.0, 0.32), (beat(16), 0.6, 0.25), (25.72, 1.0, 0.35)]
+    # The song stops at 25.65 and the TikTok end card's sound starts at 25.70: the film ends on the
+    # last downbeat (FINAL) with the wordmark, while the song's last two bars ring on and fade.
+    flashes = [(2.52, 0.35, 0.12), (4.18, 0.55, 0.15), (4.38, 0.7, 0.2), (BEAT0, 1.0, 0.32), (beat(16), 0.6, 0.25), (FINAL, 1.0, 0.35)]
     flashes += [(beat(first), 0.28, 0.1) for first, *_ in inserts]
-    punches = [(BEAT0, 0.14, 0.45), (25.72, 0.12, 0.5)] + [(beat(4 * k), 0.05, 0.3) for k in range(1, 12)]
-    return {"sal": sorted(sal), "flashes": flashes, "punches": punches, "end": 26.6, "fps": 60,
-            "titles": [(BEAT0, beat(4), 0.25), (25.72, 99, 0)], "breath": (6.02, BEAT0), "fadeOut": (26.05, 26.5)}
+    punches = [(BEAT0, 0.14, 0.45), (FINAL, 0.12, 0.5)] + [(beat(4 * k), 0.05, 0.3) for k in range(1, 12)]
+    return {"sal": sorted(sal), "flashes": flashes, "punches": punches, "end": END, "fps": 60,
+            "titles": [(BEAT0, beat(4), 0.25), (FINAL, 99, 0)], "breath": (6.02, BEAT0), "fadeOut": (27.3, 28.0)}
 
 
 def render_intro():
@@ -188,7 +195,6 @@ def render_intro():
     glow = np.clip(glow * 2.2, 0, 1)
     rng = np.random.default_rng(7)
     sink = open_sink("monster", "mon1", count, fps, plan_audio=("attached", end))
-    last_skull = None
     for i in range(count):
         t = i / fps
         seg = next((s for s in plan["sal"] if s[0] <= t < s[1]), None)
@@ -196,19 +202,21 @@ def render_intro():
         for at, amp, dur in plan["punches"]:
             if at <= t < at + dur:
                 punch += amp * (1 - smooth((t - at) / dur))
-        if seg and t < 25.72:
+        if seg and t < FINAL:
             m0, m1, s0, s1, z0, z1 = seg
             p = (t - m0) / (m1 - m0)
             src = s0 + p * (s1 - s0)
             gray = sal_frames[min(len(sal_frames) - 1, int(src * 30))]
             sq = square(grade_sal(gray), (z0 + (z1 - z0) * p) * punch, sharpen=True)
         else:
-            idx = int(round((min(t, 25.72) - SKULL_OFFSET) * 60))
+            idx = int(round((min(t, SKULL_END) - SKULL_OFFSET) * 60))
             frame = skull.get(max(idx, 0))
-            last_skull = frame
-            drift = 1.0 + 0.04 * smooth(min(1, max(0, (t - 25.72) / 0.9)))
+            drift = 1.0 + 0.07 * smooth(min(1, max(0, (t - FINAL) / 2.5)))
             sq = square(grade_skull(frame), punch * drift, sharpen=False)
         out = compose(sq)
+        if t > FINAL + 0.35:
+            # the picture sinks back under the wordmark while the song fades
+            out *= 1 - 0.5 * smooth(min(1, (t - FINAL - 0.35) / 1.2))
         b0, b1 = plan["breath"]
         if b0 <= t < b1:
             out *= 1 - 0.8 * smooth((t - b0) / (b1 - b0))
@@ -263,14 +271,19 @@ def open_sink(folder, tag, count, fps, plan_audio):
     OUT.mkdir(exist_ok=True)
     kind, seconds = plan_audio
     if kind == "attached":
+        # the track to the last downbeat, then its last two bars again (on the beat) under the fade;
+        # nothing after FINAL of the file is used, so the TikTok end card's sound never plays
         audio_in = ["-i", str(ATTACHED)]
-        afilter = f"atrim=0:{seconds:.4f},afade=t=out:st={seconds - 0.55:.3f}:d=0.5,aresample=44100"
+        audio = (f"[1:a]asplit[s1][s2];[s1]atrim=0:{FINAL:.4f},asetpts=PTS-STARTPTS[x];"
+                 f"[s2]atrim={beat(40):.4f}:{FINAL:.4f},asetpts=PTS-STARTPTS[y];"
+                 f"[x][y]acrossfade=d=0.02:c1=tri:c2=tri,afade=t=out:st={FINAL + 0.05:.3f}:d=2.45,apad,atrim=0:{seconds:.4f},"
+                 f"aresample=44100,asplit[a1][a2]")
     else:
         audio_in = ["-i", str(CLEAN / "damon_clean.mp4")]
-        afilter = f"atrim=0:{seconds:.4f},aresample=44100"
+        audio = f"[1:a]atrim=0:{seconds:.4f},aresample=44100,asplit[a1][a2]"
     graph = (f"[0:v]split=3[p][h][u];[h]scale=1024:576:flags=lanczos,format=yuvj444p[hd];"
              f"[u]format=yuvj444p,split[ua][ub];[ua]crop={TILE}:{H}:0:0[ul];[ub]crop={TILE}:{H}:{HALF - OVERLAP}:0[ur];"
-             f"[1:a]{afilter},asplit[a1][a2]")
+             f"{audio}")
     jpg = ["-q:v", "2", "-start_number", "0", "-fps_mode", "passthrough"]
     cmd = ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{W}x{H}", "-r", str(fps), "-i", "-", *audio_in,
            "-filter_complex", graph,
