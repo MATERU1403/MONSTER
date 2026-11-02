@@ -194,7 +194,8 @@ def render_intro():
     glow = cv2.GaussianBlur(art, (0, 0), 38)
     glow = np.clip(glow * 2.2, 0, 1)
     rng = np.random.default_rng(7)
-    sink = open_sink("monster", "mon1", count, fps, plan_audio=("attached", end))
+    # bump the tag on every re-cut: Roblox keeps a registered file by its name for good
+    sink = open_sink("monster", "mon2", count, fps, plan_audio=("attached", end))
     for i in range(count):
         t = i / fps
         seg = next((s for s in plan["sal"] if s[0] <= t < s[1]), None)
@@ -242,7 +243,7 @@ def render_intro():
         sink.stdin.write(np.clip(out, 0, 255).astype(np.uint8).tobytes())
         if i % 120 == 0:
             print(f"  {i}/{count}", flush=True)
-    finish(sink, "monster", "mon1", count, fps)
+    finish(sink, "monster", "mon2", count, fps)
 
 
 def render_board():

@@ -24,14 +24,15 @@ local function film(folder, tag, fps, count)
 		},
 	}
 end
-local INTRO = film("monster", "mon1", 60, 1686)
+-- (Roblox keeps a registered file by its name for good: a re-cut film gets a new tag)
+local INTRO = film("monster", "mon2", 60, 1686)
 local BOARD = film("monsterboard", "mob1", 30, 496)
 
 local function onDisk(path)
 	local ok, yes = pcall(isfile, "BasedHub/" .. path)
 	return ok and yes == true
 end
-local introOnDisk = onDisk("monster/hd/mon1_h_0000.jpg")
+local introOnDisk = onDisk("monster/hd/mon2_h_0000.jpg")
 
 -- ---- The name: BASED reads MONSTER in every word BasedHub shows, from the loading screen on.
 -- Its text changes as it is used (dropdowns, tips, toasts), so every label keeps a watch on its own.
