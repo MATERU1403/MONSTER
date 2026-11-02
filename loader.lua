@@ -25,14 +25,14 @@ local function film(folder, tag, fps, count)
 	}
 end
 -- (Roblox keeps a registered file by its name for good: a re-cut film gets a new tag)
-local INTRO = film("monster", "mon2", 60, 1686)
+local INTRO = film("monster", "mon3", 60, 1620)
 local BOARD = film("monsterboard", "mob1", 30, 496)
 
 local function onDisk(path)
 	local ok, yes = pcall(isfile, "BasedHub/" .. path)
 	return ok and yes == true
 end
-local introOnDisk = onDisk("monster/hd/mon2_h_0000.jpg")
+local introOnDisk = onDisk("monster/hd/mon3_h_0000.jpg")
 
 -- ---- The name: BASED reads MONSTER in every word BasedHub shows, from the loading screen on.
 -- Its text changes as it is used (dropdowns, tips, toasts), so every label keeps a watch on its own.
@@ -132,6 +132,12 @@ if boardReady and Board then
 	end
 end
 
+-- The brand slot is MONSTER's: without its film on this PC it plays nothing, never BasedHub's own.
+local function launchIntro(chosen)
+	if chosen == "brand" and not introReady then return "off" end
+	return chosen
+end
+
 -- Catch BasedHub's own call for its launch intro, when it has not been made yet, and play the
 -- chosen one (MONSTER, unless another was picked in Settings) before the hub comes up.
 local played, caught = false, false
@@ -141,7 +147,7 @@ if run then
 		if not played and override == nil then
 			played, caught = true, true
 			genv.BASED_INTRO = introWas
-			return run(done, introWas or B.Config.get("app.intro"), ...)
+			return run(done, launchIntro(introWas or B.Config.get("app.intro")), ...)
 		end
 		return run(done, override, ...)
 	end
@@ -158,7 +164,7 @@ local GUI = Window.gui
 -- ---- Too late to catch it (BasedHub was already up): hide the hub, play the intro, bring it back.
 if run and not played then
 	played = true
-	local chosen = Config.get("app.intro")
+	local chosen = launchIntro(Config.get("app.intro"))
 	if chosen ~= "off" then
 		Window.showActive(false)
 		run(function() Window.showActive(true) end, chosen)

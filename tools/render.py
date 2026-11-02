@@ -38,8 +38,9 @@ def beat(n):
 
 
 FINAL = beat(48)              # the last downbeat before the song stops (25.498)
+SONG_END = 25.66              # the song's own end: the TikTok end card's sound starts at 25.70
 SKULL_END = 25.70             # the skull edit's last frame, in track time
-END = 28.1                    # the fade to black is done by 28.0
+END = 27.0                    # the fade to black is done by 26.9
 
 
 def reader(path, size, gray=False):
@@ -176,12 +177,12 @@ def intro_plan():
     for first, n, a, b in inserts:
         sal.append((beat(first), beat(first + n), a, b, 1.03, 1.0))
     # The song stops at 25.65 and the TikTok end card's sound starts at 25.70: the film ends on the
-    # last downbeat (FINAL) with the wordmark, while the song's last two bars ring on and fade.
+    # last downbeat (FINAL) with the wordmark as the song fades out under it.
     flashes = [(2.52, 0.35, 0.12), (4.18, 0.55, 0.15), (4.38, 0.7, 0.2), (BEAT0, 1.0, 0.32), (beat(16), 0.6, 0.25), (FINAL, 1.0, 0.35)]
     flashes += [(beat(first), 0.28, 0.1) for first, *_ in inserts]
     punches = [(BEAT0, 0.14, 0.45), (FINAL, 0.12, 0.5)] + [(beat(4 * k), 0.05, 0.3) for k in range(1, 12)]
     return {"sal": sorted(sal), "flashes": flashes, "punches": punches, "end": END, "fps": 60,
-            "titles": [(BEAT0, beat(4), 0.25), (FINAL, 99, 0)], "breath": (6.02, BEAT0), "fadeOut": (27.3, 28.0)}
+            "titles": [(BEAT0, beat(4), 0.25), (FINAL, 99, 0)], "breath": (6.02, BEAT0), "fadeOut": (26.2, 26.9)}
 
 
 def render_intro():
@@ -195,7 +196,7 @@ def render_intro():
     glow = np.clip(glow * 2.2, 0, 1)
     rng = np.random.default_rng(7)
     # bump the tag on every re-cut: Roblox keeps a registered file by its name for good
-    sink = open_sink("monster", "mon2", count, fps, plan_audio=("attached", end))
+    sink = open_sink("monster", "mon3", count, fps, plan_audio=("attached", end))
     for i in range(count):
         t = i / fps
         seg = next((s for s in plan["sal"] if s[0] <= t < s[1]), None)
@@ -243,7 +244,7 @@ def render_intro():
         sink.stdin.write(np.clip(out, 0, 255).astype(np.uint8).tobytes())
         if i % 120 == 0:
             print(f"  {i}/{count}", flush=True)
-    finish(sink, "monster", "mon2", count, fps)
+    finish(sink, "monster", "mon3", count, fps)
 
 
 def render_board():
@@ -270,31 +271,30 @@ def open_sink(folder, tag, count, fps, plan_audio):
                 f.unlink()
         d.mkdir(parents=True, exist_ok=True)
     OUT.mkdir(exist_ok=True)
-    kind, seconds = plan_audio
-    if kind == "attached":
-        # the track to the last downbeat, then its last two bars again (on the beat) under the fade;
-        # nothing after FINAL of the file is used, so the TikTok end card's sound never plays
-        audio_in = ["-i", str(ATTACHED)]
-        audio = (f"[1:a]asplit[s1][s2];[s1]atrim=0:{FINAL:.4f},asetpts=PTS-STARTPTS[x];"
-                 f"[s2]atrim={beat(40):.4f}:{FINAL:.4f},asetpts=PTS-STARTPTS[y];"
-                 f"[x][y]acrossfade=d=0.02:c1=tri:c2=tri,afade=t=out:st={FINAL + 0.05:.3f}:d=2.45,apad,atrim=0:{seconds:.4f},"
-                 f"aresample=44100,asplit[a1][a2]")
-    else:
-        audio_in = ["-i", str(CLEAN / "damon_clean.mp4")]
-        audio = f"[1:a]atrim=0:{seconds:.4f},aresample=44100,asplit[a1][a2]"
+    # Picture only here: with the track in the same run, ffmpeg quit silently ~70 s in while
+    # frames came at render speed. The sound is made, and joined to the preview, in finish().
     graph = (f"[0:v]split=3[p][h][u];[h]scale=1024:576:flags=lanczos,format=yuvj444p[hd];"
-             f"[u]format=yuvj444p,split[ua][ub];[ua]crop={TILE}:{H}:0:0[ul];[ub]crop={TILE}:{H}:{HALF - OVERLAP}:0[ur];"
-             f"{audio}")
+             f"[u]format=yuvj444p,split[ua][ub];[ua]crop={TILE}:{H}:0:0[ul];[ub]crop={TILE}:{H}:{HALF - OVERLAP}:0[ur]")
     jpg = ["-q:v", "2", "-start_number", "0", "-fps_mode", "passthrough"]
-    cmd = ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{W}x{H}", "-r", str(fps), "-i", "-", *audio_in,
+    cmd = ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{W}x{H}", "-r", str(fps), "-i", "-",
            "-filter_complex", graph,
-           "-map", "[p]", "-map", "[a1]", "-c:v", "libx264", "-preset", "medium", "-crf", "14", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "256k",
-           "-movflags", "+faststart", str(OUT / f"{folder}_preview.mp4"),
+           "-map", "[p]", "-c:v", "libx264", "-preset", "medium", "-crf", "14", "-pix_fmt", "yuv420p", str(OUT / f"{folder}_picture.mp4"),
            "-map", "[hd]", *jpg, str(film / "hd" / f"{tag}_h_%04d.jpg"),
            "-map", "[ul]", *jpg, str(film / "ultra" / f"{tag}_l_%04d.jpg"),
-           "-map", "[ur]", *jpg, str(film / "ultra" / f"{tag}_r_%04d.jpg"),
-           "-map", "[a2]", "-c:a", "libvorbis", "-q:a", "8", str(film / f"{tag}_audio.ogg")]
-    return subprocess.Popen(cmd, stdin=subprocess.PIPE)
+           "-map", "[ur]", *jpg, str(film / "ultra" / f"{tag}_r_%04d.jpg")]
+    sink = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    sink.plan_audio = plan_audio
+    return sink
+
+
+def sound(kind, seconds):
+    """The film's track: its source file and the filter that cuts it to the picture."""
+    if kind == "attached":
+        # the track as it is, faded out to its own end; nothing after SONG_END of the file is used,
+        # so the TikTok end card's sound never plays
+        return ATTACHED, (f"atrim=0:{SONG_END:.4f},asetpts=PTS-STARTPTS,afade=t=out:st={SONG_END - 0.8:.3f}:d=0.8:curve=qsin,"
+                          f"apad,atrim=0:{seconds:.4f},aresample=44100")
+    return CLEAN / "damon_clean.mp4", f"atrim=0:{seconds:.4f},aresample=44100"
 
 
 def finish(sink, folder, tag, count, fps):
@@ -302,6 +302,14 @@ def finish(sink, folder, tag, count, fps):
     if sink.wait() != 0:
         raise SystemExit("ffmpeg failed")
     film = WS / folder
+    source, afilter = sound(*sink.plan_audio)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(source), "-vn", "-af", afilter, "-c:a", "libvorbis", "-q:a", "8",
+                    str(film / f"{tag}_audio.ogg")], check=True)
+    picture = OUT / f"{folder}_picture.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(picture), "-i", str(source), "-filter_complex", f"[1:a]{afilter}[a]",
+                    "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart",
+                    str(OUT / f"{folder}_preview.mp4")], check=True)
+    picture.unlink()
     for sub, per in (("hd", 1), ("ultra", 2)):
         n = len(list((film / sub).iterdir()))
         size = sum(f.stat().st_size for f in (film / sub).iterdir())
