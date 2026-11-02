@@ -244,8 +244,8 @@ task.spawn(function()
 	end
 end)
 
--- ---- The window: a rim that beats like a heart and blood running from the top edge and
--- dripping off. Nothing lies over the window's contents, and nothing here takes a click.
+-- ---- The window: a rim and a blood line along the top edge that beat like a heart.
+-- Nothing lies over the window's contents, and nothing here takes a click.
 task.spawn(function()
 	local stage = GUI:FindFirstChild("Stage", true)
 	local windowFrame = stage and stage:FindFirstChild("Window")
@@ -253,7 +253,6 @@ task.spawn(function()
 	local root = windowFrame:FindFirstChild("Root")
 	local rootCorner = root and root:FindFirstChildOfClass("UICorner")
 
-	local key = NumberSequenceKeypoint.new
 	local function frame(name, props, gradient, rotation)
 		local item = Instance.new("Frame")
 		item.Name = name
@@ -286,26 +285,6 @@ task.spawn(function()
 	rimStroke.Parent = rim
 	local line = frame("MonsterBloodLine", { Size = UDim2.new(0.94, 0, 0, 2), Position = UDim2.fromScale(0.03, 0), BackgroundColor3 = BLOOD, BackgroundTransparency = 0.3, ZIndex = 951 })
 
-	-- the drips: each runs down from the top edge, swells, lets a drop go, and runs again
-	local rng = Random.new()
-	local drips = {}
-	local COUNT = 13
-	for i = 1, COUNT do
-		local x = 0.05 + 0.9 * (i - 0.5 + rng:NextNumber(-0.3, 0.3)) / COUNT
-		local width = rng:NextInteger(2, 5)
-		local body = frame("MonsterDrip", { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(x, 0, 0, 1), Size = UDim2.fromOffset(width, 0),
-			BackgroundColor3 = BLOOD, BackgroundTransparency = 0.12, ZIndex = 953 }, { key(0, 0), key(1, 0.25) })
-		round(body)
-		local tip = frame("MonsterDripTip", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(width + 2, width + 3),
-			BackgroundColor3 = Color3.fromRGB(125, 0, 14), BackgroundTransparency = 0.1, ZIndex = 953 })
-		round(tip)
-		local drop = frame("MonsterDrop", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(width + 1, width + 3),
-			BackgroundColor3 = Color3.fromRGB(125, 0, 14), Visible = false, ZIndex = 953 })
-		round(drop)
-		drips[i] = { body = body, tip = tip, drop = drop, x = x, width = width, len = rng:NextNumber(0, 10), reach = rng:NextNumber(10, 44),
-			speed = rng:NextNumber(1.2, 4.5), rest = rng:NextNumber(0, 5), fall = nil, from = 0 }
-	end
-
 	local clock = 0
 	local loop
 	loop = RunService.Heartbeat:Connect(function(dt)
@@ -317,31 +296,6 @@ task.spawn(function()
 		local heart = math.exp(-(p / 0.075) ^ 2) + 0.65 * math.exp(-((p - 0.24) / 0.075) ^ 2)
 		rimStroke.Transparency = 0.72 - 0.5 * heart
 		line.BackgroundTransparency = 0.38 - 0.3 * heart
-		for _, d in ipairs(drips) do
-			if d.rest > 0 then
-				d.rest = d.rest - dt
-			elseif d.fall then
-				d.fall = d.fall + dt
-				local y = d.from + 0.5 * 1100 * d.fall * d.fall
-				d.drop.Position = UDim2.new(d.x, 0, 0, y)
-				d.drop.BackgroundTransparency = math.min(1, 0.1 + d.fall / 0.55)
-				if d.fall > 0.55 then
-					d.drop.Visible, d.fall = false, nil
-					d.reach, d.speed, d.rest = rng:NextNumber(10, 44), rng:NextNumber(1.2, 4.5), rng:NextNumber(1.5, 7)
-				end
-			else
-				d.len = math.min(d.reach, d.len + d.speed * dt * (0.35 + d.len / d.reach))
-				if d.len >= d.reach then
-					d.fall, d.from = 0, d.len + 1
-					d.drop.Position = UDim2.new(d.x, 0, 0, d.from)
-					d.drop.Visible = true
-					d.len = d.len * 0.6
-				end
-			end
-			d.body.Size = UDim2.fromOffset(d.width, d.len)
-			d.tip.Position = UDim2.new(d.x, 0, 0, d.len)
-			d.tip.Visible = d.len > 2
-		end
 	end)
 end)
 
