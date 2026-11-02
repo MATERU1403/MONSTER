@@ -1,7 +1,7 @@
 """Render the MONSTER films straight into BasedHub's film format.
 
     python -I tools/render.py intro     # the launch intro, cut to the attached track
-    python -I tools/render.py board     # the Home-tab board film
+    python -I tools/render.py board     # the Home-tab board film, cut to clean/home_track.mp4
 
 Frames are composed here (square picture over a blurred copy of itself, graded, with the
 wordmark burned in) and piped to one ffmpeg run that writes a preview mp4 plus the hd
@@ -247,19 +247,89 @@ def render_intro():
     finish(sink, "monster", "mon3", count, fps)
 
 
+# ---------------------------------------------------------------- the Home board's cut
+# The board plays the Salvatore clip re-cut to the home track (the TikTok sound in
+# home_track.mp4, 80.73 bpm). Its beats sit at HOME_BEAT0 + HOME_BEAT * k (k = -8 is the
+# first after the opening); the song is cut off at HOME_END, where TikTok's end card starts.
+HOME_TRACK = CLEAN / "home_track.mp4"
+HOME_BEAT0, HOME_BEAT = 6.634, 0.74324
+HOME_END = 19.0               # the song stops at 19.00; the end card's sound starts at 19.03
+HOME_FPS = 30
+HOME_TAG = "mob2"             # bump on every re-cut, as with the intro
+
+
+def home_beat(k):
+    return HOME_BEAT0 + HOME_BEAT * k
+
+
+# the clip's own shots: (source in, source out), in order
+HOME_SHOTS = [(0.00, 0.53), (0.63, 1.07), (1.07, 1.47), (1.53, 1.87), (1.90, 2.17), (2.40, 2.67), (2.70, 2.97),
+              (2.97, 3.37), (3.37, 3.77), (3.77, 4.17), (4.17, 4.53), (4.57, 5.37), (5.37, 5.77), (5.77, 6.17),
+              (6.17, 6.50), (6.50, 6.97), (7.37, 7.77), (7.80, 8.17), (8.17, 8.93), (8.97, 9.37), (9.37, 9.77),
+              (9.77, 10.13), (10.13, 10.57), (10.57, 10.93), (10.93, 11.33), (11.33, 11.73), (11.73, 12.17),
+              (12.17, 12.50), (12.53, 12.93), (12.93, 13.33), (13.33, 13.77), (13.77, 14.13), (14.13, 14.53),
+              (14.53, 14.93), (14.93, 15.30), (15.30, 15.73), (15.73, 16.13), (16.13, 16.53)]
+
+
+def home_plan():
+    """Slots on the beat grid: the opening, a shot a beat to the first bar line, then
+    beat / half / half for eight beats, then a shot every half beat, the last shot held out."""
+    edges = [0.0]
+    edges += [home_beat(k) for k in range(-8, 1)]                     # 0.69 .. 6.63, one beat each
+    for k in range(0, 8, 2):                                          # beats 0..7: 1, 1/2, 1/2
+        edges += [home_beat(k + 1), home_beat(k + 1.5), home_beat(k + 2)]
+    edges += [home_beat(k / 2) for k in range(17, 33)]               # beats 8..16: every half beat
+    edges.append(HOME_END)
+    slots = list(zip(edges[:-1], edges[1:]))
+    assert len(slots) == len(HOME_SHOTS), (len(slots), len(HOME_SHOTS))
+    full = {round(home_beat(k), 3) for k in range(-8, 17)}
+    flashes = [(a, 0.30 if round(a, 3) in full else 0.14, 0.12) for a, _ in slots[1:]]
+    flashes.append((home_beat(0), 0.75, 0.30))                        # the bar the cutting speeds up on
+    flashes.append((home_beat(8), 0.55, 0.25))                        # and where it goes to half beats
+    punches = [(home_beat(k), 0.05, 0.30) for k in range(-8, 17, 2)]
+    return {"slots": slots, "flashes": flashes, "punches": punches}
+
+
 def render_board():
+    plan = home_plan()
     frames = list(reader(CLEAN / "damon_clean.mp4", 720, gray=True))
-    fps, count = 30, len(frames)
-    sink = open_sink("monsterboard", "mob1", count, fps, plan_audio=("board", count / fps))
-    still = None
-    for i, gray in enumerate(frames):
-        out = compose(square(grade_sal(gray), 1.0, sharpen=True))
+    fps = HOME_FPS
+    count = int(round(HOME_END * fps))
+    sink = open_sink("monsterboard", HOME_TAG, count, fps, plan_audio=("home", count / fps))
+    still, still_at = None, 0
+    for i in range(count):
+        t = i / fps
+        n = next(j for j, (a, b) in enumerate(plan["slots"]) if a <= t < b or j == len(plan["slots"]) - 1)
+        (m0, m1), (s0, s1) = plan["slots"][n], HOME_SHOTS[n]
+        p = min(1.0, (t - m0) / (m1 - m0))
+        src = (s0 + p * (s1 - s0)) * 30
+        lo = min(len(frames) - 1, int(src))
+        hi = min(len(frames) - 1, lo + 1)
+        # slowed shots blend between their frames, so they glide instead of stepping
+        w = src - int(src)
+        gray = frames[lo] if w < 0.05 or lo == hi else cv2.addWeighted(frames[lo], 1 - w, frames[hi], w, 0)
+        punch = 1.0
+        for at, amp, dur in plan["punches"]:
+            if at <= t < at + dur:
+                punch += amp * (1 - smooth((t - at) / dur))
+        out = compose(square(grade_sal(gray), (1.0 + 0.05 * p) * punch, sharpen=True))
+        for at, amp, dur in plan["flashes"]:
+            if at <= t < at + dur:
+                out += (255 - out) * amp * (1 - (t - at) / dur) ** 2
+        if t < 0.25:                                                  # in from black, and out to it,
+            out *= smooth(t / 0.25)                                   # so the loop joins cleanly
+        if t > HOME_END - 0.3:
+            out *= 1 - smooth(min(1, (t - HOME_END + 0.3) / 0.3))
         frame = np.clip(out, 0, 255).astype(np.uint8)
-        if i == int(2.5 * fps):
-            still = frame
+        if 12.60 <= s0 + p * (s1 - s0) and still is None:                 # the close-up on his face
+            still, still_at = frame, t
         sink.stdin.write(frame.tobytes())
-    cv2.imwrite(str(WS / "monsterboard" / "mob1_still.jpg"), cv2.resize(still, (1024, 576), interpolation=cv2.INTER_AREA), [cv2.IMWRITE_JPEG_QUALITY, 92])
-    finish(sink, "monsterboard", "mob1", count, fps)
+        if i % 120 == 0:
+            print(f"  {i}/{count}", flush=True)
+    cv2.imwrite(str(WS / "monsterboard" / f"{HOME_TAG}_still.jpg"), cv2.resize(still, (1024, 576), interpolation=cv2.INTER_AREA),
+                [cv2.IMWRITE_JPEG_QUALITY, 92])
+    print(f"still at {still_at:.2f}s")
+    finish(sink, "monsterboard", HOME_TAG, count, fps)
 
 
 def open_sink(folder, tag, count, fps, plan_audio):
@@ -294,6 +364,10 @@ def sound(kind, seconds):
         # so the TikTok end card's sound never plays
         return ATTACHED, (f"atrim=0:{SONG_END:.4f},asetpts=PTS-STARTPTS,afade=t=out:st={SONG_END - 0.8:.3f}:d=0.8:curve=qsin,"
                           f"apad,atrim=0:{seconds:.4f},aresample=44100")
+    if kind == "home":
+        # the home track to the song's end, faded so the loop joins; the end card is never heard
+        return HOME_TRACK, (f"atrim=0:{HOME_END:.4f},asetpts=PTS-STARTPTS,afade=t=in:d=0.04,"
+                            f"afade=t=out:st={HOME_END - 0.35:.3f}:d=0.35:curve=qsin,apad,atrim=0:{seconds:.4f},aresample=44100")
     return CLEAN / "damon_clean.mp4", f"atrim=0:{seconds:.4f},aresample=44100"
 
 

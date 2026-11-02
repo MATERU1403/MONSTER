@@ -26,7 +26,7 @@ local function film(folder, tag, fps, count)
 end
 -- (Roblox keeps a registered file by its name for good: a re-cut film gets a new tag)
 local INTRO = film("monster", "mon3", 60, 1620)
-local BOARD = film("monsterboard", "mob1", 30, 496)
+local BOARD = film("monsterboard", "mob2", 30, 570)
 
 local function onDisk(path)
 	local ok, yes = pcall(isfile, "BasedHub/" .. path)
@@ -202,7 +202,7 @@ task.spawn(function()
 		if not still then task.wait(0.5) end
 	end
 	if not still then return end
-	local id = boardReady and B.Assets.id("monsterboard/mob1_still.jpg")
+	local id = boardReady and B.Assets.id("monsterboard/mob2_still.jpg")
 	if not id then
 		local ok, data = pcall(game.HttpGet, game, "https://raw.githubusercontent.com/MATERU1403/MONSTER/main/cinematic/damon_dark.jpg")
 		if ok and type(data) == "string" and #data > 100 then
