@@ -339,6 +339,50 @@ task.spawn(function()
 	end)
 end)
 
+-- ---- The ragebot: MONSTER's own tactics, measured 2026-11-03 against BasedHub (Main preset) on two
+-- accounts in Da Hood. Lure off: against a bot that waits, whoever shows a body first is the one shot
+-- (Main against itself 3-3; MONSTER against Main 8-0 twice in 150 s, never hurt). Bait on: the body is
+-- only shown to one seen following it. A pounce holds 0.3 s instead of 0.5, claiming 14 places a try.
+-- Flak only from inside walls, and no waiting on armor pads: each cost a death against one in the sky
+-- (8-1 either way; with the sky sniper off it was 3-5, so that stays on).
+-- Put in quietly, and only where the setting is still BasedHub's own: nothing is written to the config
+-- files every account on this PC shares, and a setting you change yourself is never touched again
+-- (kept in monster_rage.json: one you put back to BasedHub's own would not be saved by the hub).
+local RAGE = {
+	["dahood.lure"] = false,
+	["dahood.ringLure"] = false,
+	["dahood.bait"] = true,
+	["dahood.flakOpen"] = false,
+	["dahood.padTrap"] = false,
+	["dahood.k.POUNCE_STAY"] = 0.3,
+	["dahood.k.POUNCE_MARKS"] = 14,
+}
+local RAGE_KEPT = "monster_rage.json"
+task.spawn(function()
+	local Http = game:GetService("HttpService")
+	local yours = {}
+	pcall(function()
+		if isfile(RAGE_KEPT) then yours = Http:JSONDecode(readfile(RAGE_KEPT)) end
+	end)
+	if type(yours) ~= "table" then yours = {} end
+	local DH = B.DaHood
+	local giveUp = os.clock() + 60
+	while not (DH and DH.options and DH.TUNE and DH.TUNE[1] and DH.TUNE[1].id) and os.clock() < giveUp and GUI.Parent do
+		task.wait(0.25)
+		DH = B.DaHood
+	end
+	if not (DH and DH.options) then return end      -- (another game: no ragebot)
+	for id, value in pairs(RAGE) do
+		if not yours[id] and Config.get(id) ~= nil and Config.isDefault(id) then Config.set(id, value, true) end
+	end
+	-- (a change made in the menu, or by a preset, is yours from then on)
+	Config.changed:connect(function(id)
+		if RAGE[id] == nil or yours[id] then return end
+		yours[id] = true
+		pcall(writefile, RAGE_KEPT, Http:JSONEncode(yours))
+	end)
+end)
+
 -- ---- Unload: nothing of MONSTER's is left behind
 local unload = B.unload
 if unload then
