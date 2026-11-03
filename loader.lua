@@ -368,23 +368,36 @@ task.spawn(function()
 	end)
 end)
 
--- ---- The ragebot: MONSTER's own tactics, measured 2026-11-03 against BasedHub (Main preset) on two
--- accounts in Da Hood. Lure off: against a bot that waits, whoever shows a body first is the one shot
--- (Main against itself 3-3; MONSTER against Main 8-0 twice in 150 s, never hurt). Bait on: the body is
--- only shown to one seen following it. A pounce holds 0.3 s instead of 0.5, claiming 14 places a try.
--- Flak only from inside walls, and no waiting on armor pads: each cost a death against one in the sky
--- (8-1 either way; with the sky sniper off it was 3-5, so that stays on).
+-- ---- The ragebot: MONSTER's own tactics, measured 2026-11-03 against the Visions hook on two accounts
+-- in Da Hood (120 s duels). Visions follows its target, into the void too: with Lure on, MONSTER shows
+-- for a blink, Visions comes out after it and is pounced where it lands (8-0 against a friend's Visions
+-- config; with Lure off both only waited in the void, 0-0, and waiting in the sky lost 1-6). The lure
+-- shows longer, fires longer and comes back sooner, the pounce reaches 150 studs out (where a tuned
+-- Visions keeps itself) and claims 24 places a try. Against the hardest Visions found: 9-0 and 3-0,
+-- never knocked. (Against BasedHub's Main preset, which waits instead of following, Lure off won.)
 -- Put in quietly, and only where the setting is still BasedHub's own: nothing is written to the config
 -- files every account on this PC shares, and a setting you change yourself is never touched again
 -- (kept in monster_rage.json: one you put back to BasedHub's own would not be saved by the hub).
 local RAGE = {
-	["dahood.lure"] = false,
-	["dahood.ringLure"] = false,
+	["dahood.lure"] = true,
+	["dahood.ringLure"] = true,
 	["dahood.bait"] = true,
-	["dahood.flakOpen"] = false,
-	["dahood.padTrap"] = false,
-	["dahood.k.POUNCE_STAY"] = 0.3,
-	["dahood.k.POUNCE_MARKS"] = 14,
+	["dahood.flakOpen"] = true,
+	["dahood.padTrap"] = true,
+	["dahood.seen"] = 0,
+	["dahood.arrive"] = 0.05,
+	["dahood.swarmHold"] = 0.08,
+	["dahood.k.LURE_SHOW"] = 0.25,
+	["dahood.k.LURE_FIRE"] = 0.8,
+	["dahood.k.LURE_FIRE_COMER"] = 1.6,
+	["dahood.k.LURE_REST"] = 0.6,
+	["dahood.k.LURE_HUSH"] = 5,
+	["dahood.k.LURE_BALL"] = 60,
+	["dahood.k.POUNCE_OUT"] = 150,
+	["dahood.k.POUNCE_STAY"] = 0.5,
+	["dahood.k.POUNCE_MARKS"] = 24,
+	["dahood.k.POUNCE_HIGH"] = 200,
+	["dahood.k.AMBUSH_LEAST"] = 3,
 }
 local RAGE_KEPT = "monster_rage.json"
 task.spawn(function()
