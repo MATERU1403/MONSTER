@@ -2,7 +2,8 @@
 --  MONSTER  -  BasedHub, reskinned
 --
 --  Loads BasedHub and dresses it as MONSTER: the crimson scheme, the name, the
---  MONSTER intro film (cut to its own track) and the Salvatore film on Home.
+--  MONSTER intro film (cut to its own track), the Salvatore film on Home, and that
+--  same Home film as a second intro (MONSTER II in Settings, under Intro).
 --  Visuals only: BasedHub's features, tabs and layout are left as they are.
 --
 --  The films sit where BasedHub keeps its own, as frame sequences under
@@ -26,7 +27,7 @@ local function film(folder, tag, fps, count)
 end
 -- (Roblox keeps a registered file by its name for good: a re-cut film gets a new tag)
 local INTRO = film("monster", "mon3", 60, 1620)
-local BOARD = film("monsterboard", "mob1", 30, 496)
+local BOARD = film("monsterboard", "mob2", 30, 570)
 
 local function onDisk(path)
 	local ok, yes = pcall(isfile, "BasedHub/" .. path)
@@ -132,6 +133,45 @@ if boardReady and Board then
 	end
 end
 
+-- ---- A second MONSTER intro: the Home film, played whole with its own track before the hub.
+-- It is "MONSTER II" in Settings, under Intro, and in Shuffle. It plays through the brand
+-- slot's player, with the Home film lent to that slot for the one run.
+local HOME_INTRO, HOME_LABEL = "monsterhome", "MONSTER II"
+local baseRun = Loader and Loader.run
+local Controls = B.Controls
+local baseDropdown = Controls and Controls.dropdown
+if boardReady and baseRun and Loader.others and B.FILMS then
+	Loader.others[HOME_INTRO] = function(done)
+		local brandWas = B.FILMS.brand
+		B.FILMS.brand = BOARD
+		Loader.active = false           -- (set for this intro by the hub; the brand run sets it again)
+		local ok = pcall(baseRun, function()
+			B.FILMS.brand = brandWas
+			done()
+		end, "brand")
+		if not ok then
+			B.FILMS.brand = brandWas
+			done()
+		end
+	end
+	if Loader.SHUFFLE and not table.find(Loader.SHUFFLE, HOME_INTRO) then table.insert(Loader.SHUFFLE, HOME_INTRO) end
+	if baseDropdown then
+		Controls.dropdown = function(section, spec)
+			if type(spec) == "table" and spec.id == "app.intro" and type(spec.options) == "table" then
+				local options, added = {}, false
+				for _, option in ipairs(spec.options) do
+					options[#options + 1] = option
+					if option[1] == HOME_INTRO then added = true end
+				end
+				if not added then table.insert(options, 2, { HOME_INTRO, HOME_LABEL }) end   -- (right after MONSTER)
+				spec = table.clone(spec)
+				spec.options = options
+			end
+			return baseDropdown(section, spec)
+		end
+	end
+end
+
 -- The brand slot is MONSTER's: without its film on this PC it plays nothing, never BasedHub's own.
 local function launchIntro(chosen)
 	if chosen == "brand" and not introReady then return "off" end
@@ -202,7 +242,7 @@ task.spawn(function()
 		if not still then task.wait(0.5) end
 	end
 	if not still then return end
-	local id = boardReady and B.Assets.id("monsterboard/mob1_still.jpg")
+	local id = boardReady and B.Assets.id("monsterboard/mob2_still.jpg")
 	if not id then
 		local ok, data = pcall(game.HttpGet, game, "https://raw.githubusercontent.com/MATERU1403/MONSTER/main/cinematic/damon_dark.jpg")
 		if ok and type(data) == "string" and #data > 100 then
@@ -244,8 +284,8 @@ task.spawn(function()
 	end
 end)
 
--- ---- The window: a rim that beats like a heart and blood running from the top edge and
--- dripping off. Nothing lies over the window's contents, and nothing here takes a click.
+-- ---- The window: a rim and a blood line along the top edge that beat like a heart.
+-- Nothing lies over the window's contents, and nothing here takes a click.
 task.spawn(function()
 	local stage = GUI:FindFirstChild("Stage", true)
 	local windowFrame = stage and stage:FindFirstChild("Window")
@@ -253,7 +293,6 @@ task.spawn(function()
 	local root = windowFrame:FindFirstChild("Root")
 	local rootCorner = root and root:FindFirstChildOfClass("UICorner")
 
-	local key = NumberSequenceKeypoint.new
 	local function frame(name, props, gradient, rotation)
 		local item = Instance.new("Frame")
 		item.Name = name
@@ -286,26 +325,6 @@ task.spawn(function()
 	rimStroke.Parent = rim
 	local line = frame("MonsterBloodLine", { Size = UDim2.new(0.94, 0, 0, 2), Position = UDim2.fromScale(0.03, 0), BackgroundColor3 = BLOOD, BackgroundTransparency = 0.3, ZIndex = 951 })
 
-	-- the drips: each runs down from the top edge, swells, lets a drop go, and runs again
-	local rng = Random.new()
-	local drips = {}
-	local COUNT = 13
-	for i = 1, COUNT do
-		local x = 0.05 + 0.9 * (i - 0.5 + rng:NextNumber(-0.3, 0.3)) / COUNT
-		local width = rng:NextInteger(2, 5)
-		local body = frame("MonsterDrip", { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(x, 0, 0, 1), Size = UDim2.fromOffset(width, 0),
-			BackgroundColor3 = BLOOD, BackgroundTransparency = 0.12, ZIndex = 953 }, { key(0, 0), key(1, 0.25) })
-		round(body)
-		local tip = frame("MonsterDripTip", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(width + 2, width + 3),
-			BackgroundColor3 = Color3.fromRGB(125, 0, 14), BackgroundTransparency = 0.1, ZIndex = 953 })
-		round(tip)
-		local drop = frame("MonsterDrop", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(width + 1, width + 3),
-			BackgroundColor3 = Color3.fromRGB(125, 0, 14), Visible = false, ZIndex = 953 })
-		round(drop)
-		drips[i] = { body = body, tip = tip, drop = drop, x = x, width = width, len = rng:NextNumber(0, 10), reach = rng:NextNumber(10, 44),
-			speed = rng:NextNumber(1.2, 4.5), rest = rng:NextNumber(0, 5), fall = nil, from = 0 }
-	end
-
 	local clock = 0
 	local loop
 	loop = RunService.Heartbeat:Connect(function(dt)
@@ -317,31 +336,6 @@ task.spawn(function()
 		local heart = math.exp(-(p / 0.075) ^ 2) + 0.65 * math.exp(-((p - 0.24) / 0.075) ^ 2)
 		rimStroke.Transparency = 0.72 - 0.5 * heart
 		line.BackgroundTransparency = 0.38 - 0.3 * heart
-		for _, d in ipairs(drips) do
-			if d.rest > 0 then
-				d.rest = d.rest - dt
-			elseif d.fall then
-				d.fall = d.fall + dt
-				local y = d.from + 0.5 * 1100 * d.fall * d.fall
-				d.drop.Position = UDim2.new(d.x, 0, 0, y)
-				d.drop.BackgroundTransparency = math.min(1, 0.1 + d.fall / 0.55)
-				if d.fall > 0.55 then
-					d.drop.Visible, d.fall = false, nil
-					d.reach, d.speed, d.rest = rng:NextNumber(10, 44), rng:NextNumber(1.2, 4.5), rng:NextNumber(1.5, 7)
-				end
-			else
-				d.len = math.min(d.reach, d.len + d.speed * dt * (0.35 + d.len / d.reach))
-				if d.len >= d.reach then
-					d.fall, d.from = 0, d.len + 1
-					d.drop.Position = UDim2.new(d.x, 0, 0, d.from)
-					d.drop.Visible = true
-					d.len = d.len * 0.6
-				end
-			end
-			d.body.Size = UDim2.fromOffset(d.width, d.len)
-			d.tip.Position = UDim2.new(d.x, 0, 0, d.len)
-			d.tip.Visible = d.len > 2
-		end
 	end)
 end)
 
@@ -351,6 +345,12 @@ if unload then
 	B.unload = function(...)
 		renamer:Disconnect()
 		for _, connection in ipairs(adopted) do connection:Disconnect() end
+		if Loader and Loader.others then Loader.others[HOME_INTRO] = nil end
+		if Loader and Loader.SHUFFLE then
+			local at = table.find(Loader.SHUFFLE, HOME_INTRO)
+			if at then table.remove(Loader.SHUFFLE, at) end
+		end
+		if baseDropdown and Controls then Controls.dropdown = baseDropdown end
 		pcall(function()
 			for _, item in ipairs(GUI:GetDescendants()) do
 				if string.sub(item.Name, 1, 7) == "Monster" then item:Destroy() end
