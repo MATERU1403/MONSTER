@@ -80,7 +80,36 @@ local function dropHub(nameLabel)
 		end
 	end
 end
+-- Anti Report (BasedHub 20261103.1917) names who reported you as "@username reported you", on its pop-up and
+-- on the card it shows when it takes you out. Here it reads the person's display name instead: from the
+-- player when they are in the server, else looked up by name (that waits, so the label is changed when it
+-- comes). The Roblox kick box has its own text, which this does not touch.
+local Players = game:GetService("Players")
+local displayNames = {}
+local function displayOf(name)
+	if displayNames[name] then return displayNames[name] end
+	local player = Players:FindFirstChild(name)
+	if player and player:IsA("Player") then displayNames[name] = player.DisplayName; return player.DisplayName end
+	return nil
+end
+local function lookUp(name, label)
+	task.spawn(function()
+		local ok, id = pcall(Players.GetUserIdFromNameAsync, Players, name)
+		if not (ok and id) then return end
+		local okInfo, infos = pcall(function() return game:GetService("UserService"):GetUserInfosByUserIdsAsync({ id }) end)
+		local shown = okInfo and infos and infos[1] and infos[1].DisplayName
+		if not shown or shown == "" then return end
+		displayNames[name] = shown
+		if label.Parent and label.Text == "@" .. name .. " reported you" then label.Text = shown .. " reported you" end
+	end)
+end
 local function fix(label)
+	local reporter = string.match(label.Text, "^@([%w_]+) reported you$")
+	if reporter then
+		local shown = displayOf(reporter)
+		if shown then label.Text = shown .. " reported you" else lookUp(reporter, label) end
+		return
+	end
 	local to = renamed(label.Text)
 	if to and to ~= label.Text then label.Text = to end
 	if label.Text == "MONSTER" then dropHub(label) end
