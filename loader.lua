@@ -2,7 +2,7 @@
 --  MONSTER  -  BasedHub, reskinned
 --
 --  Loads BasedHub and dresses it as MONSTER: the crimson scheme, the name, the
---  MONSTER intro film (cut to its own track), the Salvatore film on Home, and that
+--  MONSTER intro film (cut to its own track), the Johan film on Home (60 fps), and that
 --  same Home film as a second intro (MONSTER II in Settings, under Intro).
 --  Visuals only: BasedHub's features, tabs and layout are left as they are.
 --
@@ -27,7 +27,7 @@ local function film(folder, tag, fps, count)
 end
 -- (Roblox keeps a registered file by its name for good: a re-cut film gets a new tag)
 local INTRO = film("monster", "mon3", 60, 1620)
-local BOARD = film("monsterboard", "mob2", 30, 570)
+local BOARD = film("monsterboard", "mob3", 60, 1140)
 
 local function onDisk(path)
 	local ok, yes = pcall(isfile, "BasedHub/" .. path)
@@ -149,7 +149,7 @@ if not B then
 end
 local Film, Loader, Board = B.Film, B.Loader, B.Board
 
--- ---- The films: MONSTER plays where the brand film did; the Home board plays the Salvatore film.
+-- ---- The films: MONSTER plays where the brand film did; the Home board plays the Johan film.
 local introReady = Film and (Film.has("ultra", INTRO) or Film.has("hd", INTRO))
 local boardReady = Film and (Film.has("ultra", BOARD) or Film.has("hd", BOARD))
 if introReady and B.FILMS then B.FILMS.brand = INTRO end
@@ -259,7 +259,7 @@ T.ok   = hex("4E8A3E")
 T.warn = hex("C9842A")
 T.bad  = hex("E0142E")
 
--- ---- Home: the card's still is a frame of the Salvatore film (shown until the film runs).
+-- ---- Home: the card's still is a frame of the Johan film (shown until the film runs).
 -- The Home tab is built a little after BasedHub is up, so it is waited for.
 task.spawn(function()
 	local still
@@ -271,7 +271,7 @@ task.spawn(function()
 		if not still then task.wait(0.5) end
 	end
 	if not still then return end
-	local id = boardReady and B.Assets.id("monsterboard/mob2_still.jpg")
+	local id = boardReady and B.Assets.id("monsterboard/mob3_still.jpg")
 	if not id then
 		local ok, data = pcall(game.HttpGet, game, "https://raw.githubusercontent.com/MATERU1403/MONSTER/main/cinematic/damon_dark.jpg")
 		if ok and type(data) == "string" and #data > 100 then
