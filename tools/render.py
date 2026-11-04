@@ -1,7 +1,7 @@
 """Render the MONSTER films straight into BasedHub's film format.
 
     python -I tools/render.py intro     # the launch intro, cut to the attached track
-    python -I tools/render.py board     # the Home-tab board film, cut to clean/home_track.mp4
+    python -I tools/render.py board     # the Home-tab board film (and MONSTER II): clean/johan_clean.mp4, from tools/clean_johan.py
 
 Frames are composed here (square picture over a blurred copy of itself, graded, with the
 wordmark burned in) and piped to one ffmpeg run that writes a preview mp4 plus the hd
@@ -247,88 +247,76 @@ def render_intro():
     finish(sink, "monster", "mon3", count, fps)
 
 
-# ---------------------------------------------------------------- the Home board's cut
-# The board plays the Salvatore clip re-cut to the home track (the TikTok sound in
-# home_track.mp4, 80.73 bpm). Its beats sit at HOME_BEAT0 + HOME_BEAT * k (k = -8 is the
-# first after the opening); the song is cut off at HOME_END, where TikTok's end card starts.
+# ---------------------------------------------------------------- the Home board's film
+# The board plays the Johan edit: the TikTok in clean/home_track.mp4 (whose sound it is), cleaned
+# by tools/clean_johan.py into clean/johan_clean.mp4: the TikTok mark painted out, every drawing
+# upscaled with Real-ESRGAN's anime model, and taken to 60 fps by optical flow. The song is used
+# up to HOME_END, where TikTok's end card starts. The same film is MONSTER II, the second intro.
 HOME_TRACK = CLEAN / "home_track.mp4"
-HOME_BEAT0, HOME_BEAT = 6.634, 0.74324
+HOME_SOURCE = CLEAN / "johan_clean.mp4"
 HOME_END = 19.0               # the song stops at 19.00; the end card's sound starts at 19.03
-HOME_FPS = 30
-HOME_TAG = "mob2"             # bump on every re-cut, as with the intro
+HOME_FPS = 60
+HOME_TAG = "mob3"             # bump on every re-cut, as with the intro
+HOME_STILL = 2.0              # s: the Home card's still (his face, turned away)
+PIC_W = 910                   # the picture keeps its own shape (576 x 648 in the TikTok), 1024 high
 
 
-def home_beat(k):
-    return HOME_BEAT0 + HOME_BEAT * k
+def frames_of(path, width, height):
+    proc = subprocess.Popen(["ffmpeg", "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "bgr24", "-"],
+                            stdout=subprocess.PIPE, bufsize=1 << 26)
+    n = width * height * 3
+    while True:
+        buf = proc.stdout.read(n)
+        if len(buf) < n:
+            break
+        yield np.frombuffer(buf, np.uint8).reshape((height, width, 3))
 
 
-# the clip's own shots: (source in, source out), in order
-HOME_SHOTS = [(0.00, 0.53), (0.63, 1.07), (1.07, 1.47), (1.53, 1.87), (1.90, 2.17), (2.40, 2.67), (2.70, 2.97),
-              (2.97, 3.37), (3.37, 3.77), (3.77, 4.17), (4.17, 4.53), (4.57, 5.37), (5.37, 5.77), (5.77, 6.17),
-              (6.17, 6.50), (6.50, 6.97), (7.37, 7.77), (7.80, 8.17), (8.17, 8.93), (8.97, 9.37), (9.37, 9.77),
-              (9.77, 10.13), (10.13, 10.57), (10.57, 10.93), (10.93, 11.33), (11.33, 11.73), (11.73, 12.17),
-              (12.17, 12.50), (12.53, 12.93), (12.93, 13.33), (13.33, 13.77), (13.77, 14.13), (14.13, 14.53),
-              (14.53, 14.93), (14.93, 15.30), (15.30, 15.73), (15.73, 16.13), (16.13, 16.53)]
+_wide = np.ones(PIC_W, np.float32)
+_wide[:_ramp] = smooth(np.linspace(0, 1, _ramp))
+_wide[-_ramp:] = _wide[:_ramp][::-1]
+WIDE_EDGE = np.tile(_wide, (H, 1))[..., None]
+WIDE_X0 = (W - PIC_W) // 2
+# a light grade: a little more bite in the mids, and the faintest warmth of blood in the whites
+HOME_CURVE = lut(lambda x: np.clip(0.5 + (x - 0.5) * 1.08, 0, 1) ** 1.04)
+HOME_TINT = np.array([0.96, 0.97, 1.0], np.float32)       # B, G, R multipliers
 
 
-def home_plan():
-    """Slots on the beat grid: the opening, a shot a beat to the first bar line, then
-    beat / half / half for eight beats, then a shot every half beat, the last shot held out."""
-    edges = [0.0]
-    edges += [home_beat(k) for k in range(-8, 1)]                     # 0.69 .. 6.63, one beat each
-    for k in range(0, 8, 2):                                          # beats 0..7: 1, 1/2, 1/2
-        edges += [home_beat(k + 1), home_beat(k + 1.5), home_beat(k + 2)]
-    edges += [home_beat(k / 2) for k in range(17, 33)]               # beats 8..16: every half beat
-    edges.append(HOME_END)
-    slots = list(zip(edges[:-1], edges[1:]))
-    assert len(slots) == len(HOME_SHOTS), (len(slots), len(HOME_SHOTS))
-    full = {round(home_beat(k), 3) for k in range(-8, 17)}
-    flashes = [(a, 0.30 if round(a, 3) in full else 0.14, 0.12) for a, _ in slots[1:]]
-    flashes.append((home_beat(0), 0.75, 0.30))                        # the bar the cutting speeds up on
-    flashes.append((home_beat(8), 0.55, 0.25))                        # and where it goes to half beats
-    punches = [(home_beat(k), 0.05, 0.30) for k in range(-8, 17, 2)]
-    return {"slots": slots, "flashes": flashes, "punches": punches}
+def compose_wide(pic):
+    """The picture, its own shape, in the middle over a blurred copy of itself, darkened at the edges."""
+    pic = cv2.LUT(pic, HOME_CURVE).astype(np.float32) * HOME_TINT
+    small = cv2.resize(pic, (W // 8, H // 8), interpolation=cv2.INTER_AREA)
+    bg = cv2.resize(cv2.GaussianBlur(small, (0, 0), 6), (W, H), interpolation=cv2.INTER_LINEAR) * 0.30
+    out = bg
+    out[:, WIDE_X0:WIDE_X0 + PIC_W] = pic * WIDE_EDGE + out[:, WIDE_X0:WIDE_X0 + PIC_W] * (1 - WIDE_EDGE)
+    return out * VIGNETTE
 
 
 def render_board():
-    plan = home_plan()
-    frames = list(reader(CLEAN / "damon_clean.mp4", 720, gray=True))
     fps = HOME_FPS
     count = int(round(HOME_END * fps))
     sink = open_sink("monsterboard", HOME_TAG, count, fps, plan_audio=("home", count / fps))
-    still, still_at = None, 0
+    still = None
+    source = frames_of(HOME_SOURCE, PIC_W, H)
+    last = None
     for i in range(count):
         t = i / fps
-        n = next(j for j, (a, b) in enumerate(plan["slots"]) if a <= t < b or j == len(plan["slots"]) - 1)
-        (m0, m1), (s0, s1) = plan["slots"][n], HOME_SHOTS[n]
-        p = min(1.0, (t - m0) / (m1 - m0))
-        src = (s0 + p * (s1 - s0)) * 30
-        lo = min(len(frames) - 1, int(src))
-        hi = min(len(frames) - 1, lo + 1)
-        # slowed shots blend between their frames, so they glide instead of stepping
-        w = src - int(src)
-        gray = frames[lo] if w < 0.05 or lo == hi else cv2.addWeighted(frames[lo], 1 - w, frames[hi], w, 0)
-        punch = 1.0
-        for at, amp, dur in plan["punches"]:
-            if at <= t < at + dur:
-                punch += amp * (1 - smooth((t - at) / dur))
-        out = compose(square(grade_sal(gray), (1.0 + 0.05 * p) * punch, sharpen=True))
-        for at, amp, dur in plan["flashes"]:
-            if at <= t < at + dur:
-                out += (255 - out) * amp * (1 - (t - at) / dur) ** 2
+        pic = next(source, None)
+        pic = last if pic is None else pic
+        last = pic
+        out = compose_wide(pic)
         if t < 0.25:                                                  # in from black, and out to it,
             out *= smooth(t / 0.25)                                   # so the loop joins cleanly
         if t > HOME_END - 0.3:
             out *= 1 - smooth(min(1, (t - HOME_END + 0.3) / 0.3))
         frame = np.clip(out, 0, 255).astype(np.uint8)
-        if 12.60 <= s0 + p * (s1 - s0) and still is None:                 # the close-up on his face
-            still, still_at = frame, t
+        if still is None and t >= HOME_STILL:
+            still = frame
         sink.stdin.write(frame.tobytes())
         if i % 120 == 0:
             print(f"  {i}/{count}", flush=True)
     cv2.imwrite(str(WS / "monsterboard" / f"{HOME_TAG}_still.jpg"), cv2.resize(still, (1024, 576), interpolation=cv2.INTER_AREA),
                 [cv2.IMWRITE_JPEG_QUALITY, 92])
-    print(f"still at {still_at:.2f}s")
     finish(sink, "monsterboard", HOME_TAG, count, fps)
 
 
