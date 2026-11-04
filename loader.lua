@@ -80,7 +80,36 @@ local function dropHub(nameLabel)
 		end
 	end
 end
+-- Anti Report (BasedHub 20261103.1917) names who reported you as "@username reported you", on its pop-up and
+-- on the card it shows when it takes you out. Here it reads the person's display name instead: from the
+-- player when they are in the server, else looked up by name (that waits, so the label is changed when it
+-- comes). The Roblox kick box has its own text, which this does not touch.
+local Players = game:GetService("Players")
+local displayNames = {}
+local function displayOf(name)
+	if displayNames[name] then return displayNames[name] end
+	local player = Players:FindFirstChild(name)
+	if player and player:IsA("Player") then displayNames[name] = player.DisplayName; return player.DisplayName end
+	return nil
+end
+local function lookUp(name, label)
+	task.spawn(function()
+		local ok, id = pcall(Players.GetUserIdFromNameAsync, Players, name)
+		if not (ok and id) then return end
+		local okInfo, infos = pcall(function() return game:GetService("UserService"):GetUserInfosByUserIdsAsync({ id }) end)
+		local shown = okInfo and infos and infos[1] and infos[1].DisplayName
+		if not shown or shown == "" then return end
+		displayNames[name] = shown
+		if label.Parent and label.Text == "@" .. name .. " reported you" then label.Text = shown .. " reported you" end
+	end)
+end
 local function fix(label)
+	local reporter = string.match(label.Text, "^@([%w_]+) reported you$")
+	if reporter then
+		local shown = displayOf(reporter)
+		if shown then label.Text = shown .. " reported you" else lookUp(reporter, label) end
+		return
+	end
 	local to = renamed(label.Text)
 	if to and to ~= label.Text then label.Text = to end
 	if label.Text == "MONSTER" then dropHub(label) end
@@ -336,6 +365,63 @@ task.spawn(function()
 		local heart = math.exp(-(p / 0.075) ^ 2) + 0.65 * math.exp(-((p - 0.24) / 0.075) ^ 2)
 		rimStroke.Transparency = 0.72 - 0.5 * heart
 		line.BackgroundTransparency = 0.38 - 0.3 * heart
+	end)
+end)
+
+-- ---- The ragebot: MONSTER's own tactics, measured 2026-11-03 against the Visions hook on two accounts
+-- in Da Hood (120 s duels). Visions follows its target, into the void too: with Lure on, MONSTER shows
+-- for a blink, Visions comes out after it and is pounced where it lands (8-0 against a friend's Visions
+-- config; with Lure off both only waited in the void, 0-0, and waiting in the sky lost 1-6). The lure
+-- shows longer, fires longer and comes back sooner, the pounce reaches 150 studs out (where a tuned
+-- Visions keeps itself) and claims 24 places a try. Against the hardest Visions found: 9-0 and 3-0,
+-- never knocked. (Against BasedHub's Main preset, which waits instead of following, Lure off won.)
+-- Put in quietly, and only where the setting is still BasedHub's own: nothing is written to the config
+-- files every account on this PC shares, and a setting you change yourself is never touched again
+-- (kept in monster_rage.json: one you put back to BasedHub's own would not be saved by the hub).
+local RAGE = {
+	["dahood.lure"] = true,
+	["dahood.ringLure"] = true,
+	["dahood.bait"] = true,
+	["dahood.flakOpen"] = true,
+	["dahood.padTrap"] = true,
+	["dahood.seen"] = 0,
+	["dahood.arrive"] = 0.05,
+	["dahood.swarmHold"] = 0.08,
+	["dahood.k.LURE_SHOW"] = 0.25,
+	["dahood.k.LURE_FIRE"] = 0.8,
+	["dahood.k.LURE_FIRE_COMER"] = 1.6,
+	["dahood.k.LURE_REST"] = 0.6,
+	["dahood.k.LURE_HUSH"] = 5,
+	["dahood.k.LURE_BALL"] = 60,
+	["dahood.k.POUNCE_OUT"] = 150,
+	["dahood.k.POUNCE_STAY"] = 0.5,
+	["dahood.k.POUNCE_MARKS"] = 24,
+	["dahood.k.POUNCE_HIGH"] = 200,
+	["dahood.k.AMBUSH_LEAST"] = 3,
+}
+local RAGE_KEPT = "monster_rage.json"
+task.spawn(function()
+	local Http = game:GetService("HttpService")
+	local yours = {}
+	pcall(function()
+		if isfile(RAGE_KEPT) then yours = Http:JSONDecode(readfile(RAGE_KEPT)) end
+	end)
+	if type(yours) ~= "table" then yours = {} end
+	local DH = B.DaHood
+	local giveUp = os.clock() + 60
+	while not (DH and DH.options and DH.TUNE and DH.TUNE[1] and DH.TUNE[1].id) and os.clock() < giveUp and GUI.Parent do
+		task.wait(0.25)
+		DH = B.DaHood
+	end
+	if not (DH and DH.options) then return end      -- (another game: no ragebot)
+	for id, value in pairs(RAGE) do
+		if not yours[id] and Config.get(id) ~= nil and Config.isDefault(id) then Config.set(id, value, true) end
+	end
+	-- (a change made in the menu, or by a preset, is yours from then on)
+	Config.changed:connect(function(id)
+		if RAGE[id] == nil or yours[id] then return end
+		yours[id] = true
+		pcall(writefile, RAGE_KEPT, Http:JSONEncode(yours))
 	end)
 end)
 
