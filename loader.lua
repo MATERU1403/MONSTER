@@ -7,7 +7,9 @@
 --  Visuals only: BasedHub's features, tabs and layout are left as they are.
 --
 --  The films sit where BasedHub keeps its own, as frame sequences under
---  workspace/BasedHub/monster (the intro) and workspace/BasedHub/monsterboard.
+--  workspace/BasedHub/monster (the intro) and workspace/BasedHub/monsterboard. MONSTER II
+--  (the Home film) is downloaded from this repo's films/ the first time a PC does not have it,
+--  and is the launch intro until another is picked in Settings.
 -- ============================================================================
 local genv = getgenv()
 local RunService = game:GetService("RunService")
@@ -153,14 +155,6 @@ local Film, Loader, Board = B.Film, B.Loader, B.Board
 local introReady = Film and (Film.has("ultra", INTRO) or Film.has("hd", INTRO))
 local boardReady = Film and (Film.has("ultra", BOARD) or Film.has("hd", BOARD))
 if introReady and B.FILMS then B.FILMS.brand = INTRO end
-if boardReady and Board then
-	Board.spec = BOARD
-	-- players already made from the old film are let go; the board makes new ones from this one
-	for _, key in ipairs({ "film", "big" }) do
-		local player = Board[key]
-		if player and not player.dead then player:destroy() end
-	end
-end
 
 -- ---- A second MONSTER intro: the Home film, played whole with its own track before the hub.
 -- It is "MONSTER II" in Settings, under Intro, and in Shuffle. It plays through the brand
@@ -169,40 +163,70 @@ local HOME_INTRO, HOME_LABEL = "monsterhome", "MONSTER II"
 local baseRun = Loader and Loader.run
 local Controls = B.Controls
 local baseDropdown = Controls and Controls.dropdown
-if boardReady and baseRun and Loader.others and B.FILMS then
-	Loader.others[HOME_INTRO] = function(done)
-		local brandWas = B.FILMS.brand
-		B.FILMS.brand = BOARD
-		Loader.active = false           -- (set for this intro by the hub; the brand run sets it again)
-		local ok = pcall(baseRun, function()
-			B.FILMS.brand = brandWas
-			done()
-		end, "brand")
-		if not ok then
-			B.FILMS.brand = brandWas
-			done()
+-- the Home film is on this PC: the board plays it, and MONSTER II can be played
+local function boardUp()
+	if Board then
+		Board.spec = BOARD
+		-- players already made from the old film are let go; the board makes new ones from this one
+		for _, key in ipairs({ "film", "big" }) do
+			local player = Board[key]
+			if player and not player.dead then player:destroy() end
 		end
 	end
-	if Loader.SHUFFLE and not table.find(Loader.SHUFFLE, HOME_INTRO) then table.insert(Loader.SHUFFLE, HOME_INTRO) end
-	if baseDropdown then
-		Controls.dropdown = function(section, spec)
-			if type(spec) == "table" and spec.id == "app.intro" and type(spec.options) == "table" then
-				local options, added = {}, false
-				for _, option in ipairs(spec.options) do
-					options[#options + 1] = option
-					if option[1] == HOME_INTRO then added = true end
-				end
-				if not added then table.insert(options, 2, { HOME_INTRO, HOME_LABEL }) end   -- (right after MONSTER)
-				spec = table.clone(spec)
-				spec.options = options
+	if baseRun and Loader.others and B.FILMS then
+		Loader.others[HOME_INTRO] = function(done)
+			local brandWas = B.FILMS.brand
+			B.FILMS.brand = BOARD
+			Loader.active = false           -- (set for this intro by the hub; the brand run sets it again)
+			local ok = pcall(baseRun, function()
+				B.FILMS.brand = brandWas
+				done()
+			end, "brand")
+			if not ok then
+				B.FILMS.brand = brandWas
+				done()
 			end
-			return baseDropdown(section, spec)
 		end
+		if Loader.SHUFFLE and not table.find(Loader.SHUFFLE, HOME_INTRO) then table.insert(Loader.SHUFFLE, HOME_INTRO) end
+	end
+end
+if boardReady then boardUp() end
+-- (in the list whether or not its film is here yet: it is downloaded below, and the list is made once)
+if baseDropdown then
+	Controls.dropdown = function(section, spec)
+		if type(spec) == "table" and spec.id == "app.intro" and type(spec.options) == "table" then
+			local options, added = {}, false
+			for _, option in ipairs(spec.options) do
+				options[#options + 1] = option
+				if option[1] == HOME_INTRO then added = true end
+			end
+			if not added then table.insert(options, 2, { HOME_INTRO, HOME_LABEL }) end   -- (right after MONSTER)
+			spec = table.clone(spec)
+			spec.options = options
+		end
+		return baseDropdown(section, spec)
 	end
 end
 
+-- MONSTER II is the launch intro: made so once, on an install still on BasedHub's own (the brand
+-- slot, MONSTER). Whatever is picked in Settings after that is kept.
+local INTRO_PICKED = "MONSTER/intro_ii.picked"
+local function startingIntro(chosen)
+	if introWas ~= nil or chosen ~= "brand" then return chosen end
+	local okSeen, seen = pcall(isfile, INTRO_PICKED)
+	if okSeen and seen then return chosen end
+	pcall(function()
+		if not isfolder("MONSTER") then makefolder("MONSTER") end
+		writefile(INTRO_PICKED, "MONSTER II was made the launch intro once. Pick any other in Settings, under Intro.")
+	end)
+	pcall(B.Config.set, "app.intro", HOME_INTRO)
+	return HOME_INTRO
+end
+
 -- The brand slot is MONSTER's: without its film on this PC it plays nothing, never BasedHub's own.
+-- MONSTER II before its film is here (it is being downloaded): MONSTER this time.
 local function launchIntro(chosen)
+	if chosen == HOME_INTRO and not (Loader and Loader.others and Loader.others[HOME_INTRO]) then chosen = "brand" end
 	if chosen == "brand" and not introReady then return "off" end
 	return chosen
 end
@@ -216,8 +240,10 @@ if run then
 		if not played and override == nil then
 			played, caught = true, true
 			genv.BASED_INTRO = introWas
-			return run(done, launchIntro(introWas or B.Config.get("app.intro")), ...)
+			return run(done, launchIntro(startingIntro(introWas or B.Config.get("app.intro"))), ...)
 		end
+		-- (Replay in Settings, or Shuffle's own pick: MONSTER II only once its film is here)
+		if override == HOME_INTRO then override = launchIntro(override) end
 		return run(done, override, ...)
 	end
 end
@@ -233,11 +259,66 @@ local GUI = Window.gui
 -- ---- Too late to catch it (BasedHub was already up): hide the hub, play the intro, bring it back.
 if run and not played then
 	played = true
-	local chosen = launchIntro(Config.get("app.intro"))
+	local chosen = launchIntro(startingIntro(Config.get("app.intro")))
 	if chosen ~= "off" then
 		Window.showActive(false)
 		run(function() Window.showActive(true) end, chosen)
 	end
+end
+
+-- ---- MONSTER II's film (the Home film), from this repo, the first time this PC does not have it.
+-- films/monsterboard holds its frames joined into packs, and an index of each frame's length
+-- (tools/pack_film.py): each pack is fetched whole and cut back into the frames BasedHub's film
+-- player reads. HD always (the Home card plays it); Ultra too on a screen 800 tall or more.
+local FILMS = "https://raw.githubusercontent.com/MATERU1403/MONSTER/main/films/"
+local function fetchFilm(folder, tag, wantUltra)
+	local Http = game:GetService("HttpService")
+	local okIndex, body = pcall(game.HttpGet, game, FILMS .. folder .. "/" .. tag .. ".json")
+	if not (okIndex and type(body) == "string") then return false, "no index" end
+	local okJson, index = pcall(Http.JSONDecode, Http, body)
+	if not (okJson and type(index) == "table" and type(index.packs) == "table") then return false, "a bad index" end
+	local root = "BasedHub/" .. folder
+	for _, dir in ipairs({ "BasedHub", root, root .. "/hd", root .. "/ultra" }) do
+		if not isfolder(dir) then makefolder(dir) end
+	end
+	for _, name in ipairs(index.files or {}) do
+		if not isfile(root .. "/" .. name) then
+			local ok, data = pcall(game.HttpGet, game, FILMS .. folder .. "/" .. name)
+			if not (ok and type(data) == "string" and #data > 0) then return false, name end
+			writefile(root .. "/" .. name, data)
+		end
+	end
+	for _, pack in ipairs(index.packs) do
+		local frames = pack.frames
+		-- (a pack is fetched again only when its first or last frame is missing: a download cut short)
+		if (pack.set == "hd" or wantUltra) and not (isfile(root .. "/" .. frames[1][1]) and isfile(root .. "/" .. frames[#frames][1])) then
+			local ok, data = pcall(game.HttpGet, game, FILMS .. folder .. "/" .. pack.name)
+			if not (ok and type(data) == "string" and #data == pack.bytes) then return false, pack.name end
+			local at = 1
+			for n, frame in ipairs(frames) do
+				writefile(root .. "/" .. frame[1], string.sub(data, at, at + frame[2] - 1))
+				at = at + frame[2]
+				if n % 24 == 0 then task.wait() end
+			end
+		end
+	end
+	return true
+end
+if Film and not boardReady then
+	task.spawn(function()
+		local camera = workspace.CurrentCamera
+		local wantUltra = camera ~= nil and camera.ViewportSize.Y >= 800
+		Window.toast({ title = "Downloading MONSTER II", text = wantUltra and "The Home film and intro, about 110 MB, once." or "The Home film and intro, about 35 MB, once.",
+			icon = "download", time = 5 })
+		local ok, done, why = pcall(fetchFilm, "monsterboard", "mob3", wantUltra)
+		if ok and done then
+			boardReady = true
+			boardUp()
+			Window.toast({ title = "MONSTER II is ready", text = "It plays on Home now, and as the launch intro from the next start.", icon = "film", time = 5 })
+		else
+			warn("[MONSTER] MONSTER II's film could not be downloaded: " .. tostring(ok and why or done))
+		end
+	end)
 end
 
 -- ---- Colour: black with blood under it, bone ink, fresh blood for every accent
