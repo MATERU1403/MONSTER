@@ -506,12 +506,284 @@ task.spawn(function()
 	end)
 end)
 
+-- ---- Desync and Fake position (Da Hood), measured 2026-11-07 with two accounts 40 studs apart.
+-- Raknet would be the clean way, but Potassium's send and receive hooks never fire yet (0 packets, on a
+-- fresh connection too), so it is done with the body: after each physics step it is put where it should
+-- be seen, and put back before the next step and before the frame is drawn. You walk, aim and see as
+-- always; the server, and everyone with it, get the other place.
+--  * The other screen saw the fake place 95-100% of the time (20 to the side, 40 under the map, a ring 40 out).
+--  * A body standing still sends nothing (the server keeps what it last had), so each step gets a 0.02-stud
+--    nudge while either is on, and for half a second after, so the real body goes out again too.
+--  * Desync 40: 3 of 3 shots at what the other screen saw were refused. Held 40 under the map: 2 of 2 refused.
+--  * Your own shots are checked from where the server has you, so they are refused while faked: both let
+--    go while you hold anything, and the real body is back on the server before you fire.
+--  * Humanoid:MoveTo stops while it runs (walking with the keys is fine), and the ragebot moves the body
+--    itself: both step aside while it hunts.
+-- On target (asked 2026-11-07 after a clip of exterminate's Fake position): the server is given the body
+-- beside a target, and the gun is fired from there, since that is where the server checks shots from;
+-- you stay where you are and see yourself there. A hop is waited out before the first shot (the server
+-- refused shots for 0.1-0.2 s after one), and the side it sits on has a clear line to the target.
+local Desync = {}
+do
+	local LP = B.LP
+	local Players = game:GetService("Players")
+	local DEFAULTS = {
+		["monster.desync"] = false, ["monster.desyncRange"] = 40,
+		["monster.fake"] = false, ["monster.fakeWhere"] = "target", ["monster.fakeDistance"] = 40, ["monster.fakeNear"] = 4,
+		["monster.desyncTools"] = true, ["monster.desyncBox"] = true,
+	}
+	for id, default in pairs(DEFAULTS) do Config.define(id, default) end
+
+	local root, real, put
+	local nudge, sendUntil = 1, 0
+	local connections = {}
+	-- On target: who, since when the body has been beside them, and the gun's clock
+	local hunt = { player = nil, since = 0, last = nil, nextShot = 0, reloadUntil = 0, spread = 0, fired = 0, reloads = 0 }
+	genv.MONSTER_HUNT = hunt      -- (what a test reads: who, shots fired, reloads)
+
+	-- the red body where they see you, in a folder of its own in the world, as the hub keeps its own:
+	-- under the camera Da Hood took it away at once (measured: every frame after failed on "locked")
+	local holder, box
+	local function newBox()
+		if not (holder and holder.Parent) then
+			holder = Instance.new("Folder")
+			holder.Name = (B.util and B.util.randomName) and B.util.randomName() or "MonsterFake"
+			holder.Parent = workspace
+		end
+		box = Instance.new("Part")
+		box.Name = "MonsterFakeBody"
+		box.Anchored, box.CanCollide, box.CanQuery, box.CanTouch, box.CastShadow = true, false, false, false, false
+		box.Size = Vector3.new(4, 5, 1.4)
+		box.Material = Enum.Material.ForceField
+		box.Color = Color3.fromRGB(176, 0, 30)
+	end
+	local function hideBox()
+		if box then pcall(function() box.Parent = nil end) end
+	end
+	local function showBox(cframe)
+		if not Config.get("monster.desyncBox") then return hideBox() end
+		if box and pcall(function() box.CFrame = cframe; box.Parent = holder end) then return end
+		pcall(newBox)
+		if box then pcall(function() box.CFrame = cframe; box.Parent = holder end) end
+	end
+
+	local function wanted() return Config.get("monster.desync") == true or Config.get("monster.fake") == true end
+	local function hunting() return B.DaHood ~= nil and B.DaHood.on == true end
+	local function onTarget() return Config.get("monster.fake") == true and Config.get("monster.fakeWhere") == "target" end
+	-- alive, not knocked, not behind a spawn shield
+	local function standing(character)
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		local effects = character and character:FindFirstChild("BodyEffects")
+		local knocked = effects and effects:FindFirstChild("K.O")
+		return humanoid ~= nil and humanoid.Health > 0 and not (knocked and knocked.Value) and not character:FindFirstChildOfClass("ForceField")
+	end
+	local function active(character)
+		if not wanted() or hunting() then return false end
+		-- (On target shoots for you, so a gun in hand is what it wants)
+		if Config.get("monster.desyncTools") and not onTarget() and character:FindFirstChildOfClass("Tool") then return false end
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		local effects = character:FindFirstChild("BodyEffects")
+		local knocked = effects and effects:FindFirstChild("K.O")
+		return humanoid ~= nil and humanoid.Health > 0 and not (knocked and knocked.Value)
+	end
+
+	-- who On target sits by: the hub's marked players if there are any, else the nearest who is not a
+	-- friend; kept until knocked, dead or gone
+	local function marked(player)
+		local DH, Roster = B.DaHood, B.Roster
+		return (DH and DH.isMarked and DH.isMarked(player)) or (Roster and Roster.targets[player.UserId] == true)
+	end
+	local function anyMarked()
+		local DH, Roster = B.DaHood, B.Roster
+		return (DH and DH.marked and next(DH.marked) ~= nil) or (Roster and Roster.anyTargets and Roster.anyTargets())
+	end
+	local function pick(from)
+		if hunt.player and hunt.player.Parent and standing(hunt.player.Character) then return hunt.player end
+		local only, best, bestGap = anyMarked(), nil, nil
+		for _, player in ipairs(Players:GetPlayers()) do
+			local friend = B.Roster and B.Roster.friends[player.UserId]
+			local theirRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+			if player ~= LP and not friend and (not only or marked(player)) and theirRoot and standing(player.Character) then
+				local gap = (theirRoot.Position - from).Magnitude
+				if not bestGap or gap < bestGap then best, bestGap = player, gap end
+			end
+		end
+		return best
+	end
+	-- beside them: behind, then their right, left, front, with a clear line to them; above if none is
+	local SIDES = { Vector3.new(0, 0, 1), Vector3.new(1, 0, 0), Vector3.new(-1, 0, 0), Vector3.new(0, 0, -1) }
+	local sight = RaycastParams.new()
+	sight.FilterType = Enum.RaycastFilterType.Exclude
+	local function besideOf(player)
+		local theirRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+		if not theirRoot then return nil end
+		sight.FilterDescendantsInstances = { LP.Character, player.Character, workspace.CurrentCamera }
+		local centre, near = theirRoot.Position, Config.get("monster.fakeNear")
+		for _, side in ipairs(SIDES) do
+			local spot = (theirRoot.CFrame * CFrame.new(side * near)).Position
+			if not workspace:Raycast(centre, spot - centre, sight) then
+				return CFrame.lookAt(spot, Vector3.new(centre.X, spot.Y, centre.Z))
+			end
+		end
+		return CFrame.new(centre + Vector3.new(0, near + 2, 0))
+	end
+
+	-- the gun On target fires: the one in hand, else the first in the backpack with rounds to fire
+	local function spare(gun)
+		local inventory = LP:FindFirstChild("DataFolder") and LP.DataFolder:FindFirstChild("Inventory")
+		local held = inventory and inventory:FindFirstChild(gun.Name)
+		return held and tonumber(held.Value) or 0
+	end
+	local function gunIn(character)
+		local held = character:FindFirstChildOfClass("Tool")
+		if held and held:FindFirstChild("Ammo") then return held end
+		local pack = LP:FindFirstChildOfClass("Backpack")
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		for _, item in ipairs(pack and pack:GetChildren() or {}) do
+			if item:IsA("Tool") and item:FindFirstChild("Ammo") and (item.Ammo.Value > 0 or spare(item) > 0) and humanoid then
+				humanoid:EquipTool(item)
+				return nil      -- (fires from the next step on, once it is in hand)
+			end
+		end
+		return nil
+	end
+	-- one shot (a shell of five pellets for a shotgun) from the body where it is now: beside the target
+	local function fire(gun, part)
+		local handle, ammo = gun:FindFirstChild("Handle"), gun:FindFirstChild("Ammo")
+		local remote = game:GetService("ReplicatedStorage"):FindFirstChild("MainEvent")
+		local now = os.clock()
+		if not (handle and ammo and remote) or now < hunt.nextShot then return end
+		if ammo.Value <= 0 then
+			if now >= hunt.reloadUntil and spare(gun) > 0 then
+				remote:FireServer("Reload", gun)
+				hunt.reloadUntil = now + 3
+				hunt.reloads += 1
+			end
+			hunt.nextShot = now + 0.25
+			return
+		end
+		local cooldown = gun:FindFirstChild("ShootingCooldown")
+		hunt.nextShot = now + (cooldown and cooldown.Value or 0.3) + 0.03
+		hunt.fired += 1
+		local up = Vector3.new(0, 1, 0)
+		if string.find(gun.Name, "Shotgun", 1, true) or string.find(gun.Name, "Double-Barrel", 1, true) or string.find(gun.Name, "SG", 1, true) then
+			hunt.spread += 1
+			local stamp = workspace:GetServerTimeNow()
+			for pellet = 1, 5 do remote:FireServer("ShootGun", handle, handle.Position, part.Position, part, up, stamp, hunt.spread, pellet) end
+		else
+			remote:FireServer("ShootGun", handle, handle.Position, part.Position, part, up)
+		end
+	end
+
+	-- where the server is given the body this step (nil: where it really is)
+	local function fakeOf(cframe)
+		if onTarget() then
+			local target = pick(cframe.Position)
+			if target ~= hunt.player then hunt.player, hunt.since, hunt.last = target, os.clock(), nil end
+			return target and besideOf(target) or nil
+		end
+		local centre = cframe
+		if Config.get("monster.fake") then
+			local far = Config.get("monster.fakeDistance")
+			local where = Config.get("monster.fakeWhere")
+			local flat = Vector3.new(cframe.LookVector.X, 0, cframe.LookVector.Z)
+			flat = flat.Magnitude > 0.01 and flat.Unit or Vector3.new(0, 0, -1)
+			if where == "above" then centre = cframe + Vector3.new(0, far, 0)
+			elseif where == "behind" then centre = cframe - flat * far
+			elseif where == "side" then centre = cframe + Vector3.new(-flat.Z, 0, flat.X) * far
+			else centre = cframe - Vector3.new(0, far, 0) end
+		end
+		if Config.get("monster.desync") then
+			local turn = math.random() * math.pi * 2
+			local range = Config.get("monster.desyncRange")
+			centre = centre + Vector3.new(math.cos(turn) * range, 0, math.sin(turn) * range)
+		end
+		return centre
+	end
+	-- put back, keeping whatever small change was made while it was away (a tool taken out shifts it a
+	-- little, the camera turns it); a body moved further than that was moved on purpose, and stays
+	local function putBack()
+		if put and root and root.Parent and (root.Position - put.Position).Magnitude < 2 then
+			root.CFrame = real * put:ToObjectSpace(root.CFrame)
+		end
+		put = nil
+	end
+
+	connections[#connections + 1] = RunService.PreSimulation:Connect(function()
+		putBack()
+		if os.clock() < sendUntil and root and root.Parent then
+			nudge = -nudge
+			root.CFrame = root.CFrame + Vector3.new(0.02 * nudge, 0, 0)
+		end
+	end)
+	connections[#connections + 1] = RunService.PreRender:Connect(putBack)
+	connections[#connections + 1] = RunService.PostSimulation:Connect(function()
+		putBack()
+		local character = LP.Character
+		root = character and character:FindFirstChild("HumanoidRootPart")
+		if wanted() and not hunting() then sendUntil = os.clock() + 0.5 end
+		if not (root and active(character)) then
+			hideBox()
+			hunt.player = nil
+			return
+		end
+		real = root.CFrame
+		put = fakeOf(real)
+		if not put then return hideBox() end
+		root.CFrame = put
+		-- On target: a jump to a new place is waited out before firing, then every shot goes from here
+		if onTarget() and hunt.player then
+			local now = os.clock()
+			if hunt.last and (put.Position - hunt.last).Magnitude > 12 then hunt.since = now end
+			hunt.last = put.Position
+			local gun = gunIn(character)
+			local part = hunt.player.Character and (hunt.player.Character:FindFirstChild("UpperTorso") or hunt.player.Character:FindFirstChild("HumanoidRootPart"))
+			if gun and part and now - hunt.since >= 0.25 then fire(gun, part) end
+		end
+		showBox(put)
+	end)
+
+	-- its own tab, beside Da Hood's (another game has no Ragebot tab, and gets none of this)
+	task.spawn(function()
+		local giveUp = os.clock() + 60
+		while not (Window.pages and Window.pages["dahood.ragebot"]) and os.clock() < giveUp and GUI.Parent do task.wait(0.25) end
+		local rage = Window.pages and Window.pages["dahood.ragebot"]
+		if not rage then return end
+		local last = rage.order
+		for _, page in ipairs(Window.order) do
+			if page.group == rage.group and page.order > last then last = page.order end
+		end
+		Window.page({ id = "dahood.monster", title = "Desync", icon = "ghost", group = rage.group, order = last + 1, eyebrow = rage.eyebrow, build = function(page)
+			local jump = page:section({ title = "Desync", icon = "shuffle", desc = "Others see you somewhere new every step." })
+			jump:toggle({ id = "monster.desync", label = "Desync", desc = "You jump around for them. Their shots miss.", default = false })
+			jump:slider({ id = "monster.desyncRange", label = "How far", desc = "How far from you they see you.", min = 10, max = 150, step = 1, default = 40, suffix = " st" })
+			local fake = page:section({ title = "Fake position", icon = "map-pin", desc = "Others see you in one other place." })
+			fake:toggle({ id = "monster.fake", label = "Fake position", desc = "They see you there, you play here.", default = false })
+			fake:dropdown({ id = "monster.fakeWhere", label = "Where", desc = "On target sits by them and shoots.",
+				options = { { "target", "On target" }, { "below", "Below" }, { "behind", "Behind" }, { "side", "Side" }, { "above", "Above" } }, default = "target" })
+			fake:slider({ id = "monster.fakeNear", label = "From target", desc = "How close to them, on target.", min = 2, max = 12, step = 1, default = 4, suffix = " st" })
+			fake:slider({ id = "monster.fakeDistance", label = "How far", desc = "How far from you, the others.", min = 5, max = 200, step = 1, default = 40, suffix = " st" })
+			local both = page:section({ title = "Both", icon = "settings-2", desc = "Both stop while the ragebot hunts." })
+			both:toggle({ id = "monster.desyncTools", label = "Off while holding", desc = "A gun out brings you back (not on target).", default = true })
+			both:toggle({ id = "monster.desyncBox", label = "Show where they see you", desc = "A red body at your fake place.", default = true })
+		end })
+	end)
+
+	function Desync.stop()
+		for _, connection in ipairs(connections) do connection:Disconnect() end
+		putBack()
+		if holder then pcall(function() holder:Destroy() end) end
+		if Window.pages and Window.pages["dahood.monster"] then Window.removePage("dahood.monster") end
+	end
+end
+
 -- ---- Unload: nothing of MONSTER's is left behind
 local unload = B.unload
 if unload then
 	B.unload = function(...)
 		renamer:Disconnect()
 		for _, connection in ipairs(adopted) do connection:Disconnect() end
+		Desync.stop()
 		if Loader and Loader.others then Loader.others[HOME_INTRO] = nil end
 		if Loader and Loader.SHUFFLE then
 			local at = table.find(Loader.SHUFFLE, HOME_INTRO)
