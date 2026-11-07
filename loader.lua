@@ -529,7 +529,7 @@ do
 	local Players = game:GetService("Players")
 	local DEFAULTS = {
 		["monster.desync"] = false, ["monster.desyncRange"] = 40,
-		["monster.fake"] = false, ["monster.fakeWhere"] = "target", ["monster.fakeDistance"] = 40, ["monster.fakeNear"] = 4,
+		["monster.fake"] = false, ["monster.fakeWhere"] = "decoy", ["monster.fakeDistance"] = 40, ["monster.fakeNear"] = 4, ["monster.ghostHeight"] = 120, ["monster.ghostJitter"] = 10, ["monster.decoyUp"] = 0,
 		["monster.desyncTools"] = true, ["monster.desyncBox"] = true,
 	}
 	for id, default in pairs(DEFAULTS) do Config.define(id, default) end
@@ -570,6 +570,61 @@ do
 	local function wanted() return Config.get("monster.desync") == true or Config.get("monster.fake") == true end
 	local function hunting() return B.DaHood ~= nil and B.DaHood.on == true end
 	local function onTarget() return Config.get("monster.fake") == true and Config.get("monster.fakeWhere") == "target" end
+	local function ghosting() return Config.get("monster.fake") == true and Config.get("monster.fakeWhere") == "ghost" end
+	-- Decoy (asked 2026-11-07 after the clip: the other screen sees your character standing still where you
+	-- switched it on, while you roam and your hits land). The body stays at that spot; for each shot it is
+	-- taken to the ghost's firing place for a moment (the server wants it within 17 studs of the origin and
+	-- refused shots for 0.1-0.2 s after a hop) and sent back.
+	local function decoying() return Config.get("monster.fake") == true and Config.get("monster.fakeWhere") == "decoy" end
+	local STRIKE_WAIT, STRIKE_HOLD = 0.3, 0.9
+
+	-- Ghost (asked 2026-11-07): the server holds the body high above you, you walk, aim and shoot where you
+	-- stand. Measured with two accounts: shots sent with the origin at a body 40 UNDER the map were refused
+	-- (0 of 3: the ground is in the line), the same 40 ABOVE were taken (3 of 3, ~21 each with a Rifle). So
+	-- the ghost goes up, and your own shots are re-sent from the ghost's place: the server checks the origin
+	-- against where it has the body, and the hit point stays where you aimed.
+	local ghost = genv.MONSTER_GHOST
+	if not ghost then ghost = { shift = nil, real = nil, hooked = false, redirected = 0, home = nil, strikeSince = 0, strikeUntil = 0, delayed = 0, bypass = false }; genv.MONSTER_GHOST = ghost end
+	ghost.shift, ghost.real, ghost.home = nil, nil, nil
+	ghost.strikeSince, ghost.strikeUntil, ghost.delayed, ghost.bypass, ghost.redirected = ghost.strikeSince or 0, ghost.strikeUntil or 0, ghost.delayed or 0, false, ghost.redirected or 0
+	-- (a hook cannot be taken off: a newer build stacks its own on top of an older one, which only passes through)
+	if ghost.hookVersion ~= 2 and hookmetamethod and getnamecallmethod then
+		local okHook = pcall(function()
+			local old
+			old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+				local shift = ghost.shift
+				if shift and not ghost.bypass and getnamecallmethod() == "FireServer" and typeof(self) == "Instance" and self.Name == "MainEvent" then
+					local args = { ... }
+					if args[1] == "ShootGun" and typeof(args[3]) == "Vector3" and ghost.real and (args[3] - ghost.real).Magnitude < 25 then
+						args[3] = args[3] + shift
+						ghost.redirected += 1
+						local count = select("#", ...)
+						if ghost.decoy then
+							-- the body goes to the firing place now; the shot leaves once it has been there a moment
+							local now = os.clock()
+							if now > ghost.strikeUntil then ghost.strikeSince = now end
+							ghost.strikeUntil = now + STRIKE_HOLD
+							local wait = ghost.strikeSince + STRIKE_WAIT - now
+							if wait > 0 then
+								ghost.delayed += 1
+								task.spawn(function()
+									task.wait(wait)
+									ghost.bypass = true
+									pcall(self.FireServer, self, table.unpack(args, 1, count))
+									ghost.bypass = false
+								end)
+								return
+							end
+						end
+						return old(self, table.unpack(args, 1, count))
+					end
+				end
+				return old(self, ...)
+			end))
+		end)
+		ghost.hooked = okHook
+		if okHook then ghost.hookVersion = 2 end
+	end
 	-- alive, not knocked, not behind a spawn shield
 	local function standing(character)
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
@@ -580,7 +635,7 @@ do
 	local function active(character)
 		if not wanted() or hunting() then return false end
 		-- (On target shoots for you, so a gun in hand is what it wants)
-		if Config.get("monster.desyncTools") and not onTarget() and character:FindFirstChildOfClass("Tool") then return false end
+		if Config.get("monster.desyncTools") and not onTarget() and not ghosting() and not decoying() and character:FindFirstChildOfClass("Tool") then return false end
 		local humanoid = character:FindFirstChildOfClass("Humanoid")
 		local effects = character:FindFirstChild("BodyEffects")
 		local knocked = effects and effects:FindFirstChild("K.O")
@@ -683,7 +738,83 @@ do
 			return target and besideOf(target) or nil
 		end
 		local centre = cframe
-		if Config.get("monster.fake") then
+		if ghosting() or decoying() then
+			-- straight up, as high as asked; under a roof or awning, up through the nearest open sky instead
+			-- (measured: an awning 4 studs over the body left the ghost at 0 rise, and no shot was taken)
+			local now, want = os.clock(), Config.get("monster.ghostHeight")
+			if not ghost.until_ or now > ghost.until_ or ghost.want ~= want then
+				sight.FilterDescendantsInstances = { LP.Character, workspace.CurrentCamera }
+				local here = cframe.Position
+				local function room(offset)
+					local hit = workspace:Raycast(here + offset, Vector3.new(0, want + 4, 0), sight)
+					return hit and math.max(hit.Distance - 4, 0) or want
+				end
+				local best, bestRoom = Vector3.new(0, 0, 0), room(Vector3.new(0, 0, 0))
+				-- measured 2026-11-07: a shot is refused when anything is in the line from the ghost to the
+				-- target (a target under a roof 12 studs thick: 0 of 8 from 20 to 120 up). So with someone
+				-- to shoot at, the ghost goes to the highest free spot that SEES them.
+				local target = pick(here)
+				local torso = target and target.Character and (target.Character:FindFirstChild("UpperTorso") or target.Character:FindFirstChild("HumanoidRootPart"))
+				local seen = false
+				if torso and bestRoom >= 0 then
+					local aim = torso.Position
+					local params = OverlapParams.new()
+					params.FilterType = Enum.RaycastFilterType.Exclude
+					params.FilterDescendantsInstances = { LP.Character, target.Character, workspace.CurrentCamera }
+					sight.FilterDescendantsInstances = { LP.Character, target.Character, workspace.CurrentCamera }
+					local offsets = { Vector3.new(0, 0, 0) }
+					for _, radius in ipairs({ 8, 16, 28, 45 }) do
+						for step = 0, 7 do
+							local turn = step * math.pi / 4
+							offsets[#offsets + 1] = Vector3.new(math.cos(turn) * radius, 0, math.sin(turn) * radius)
+						end
+					end
+					for _, height in ipairs({ want, want * 0.6, 25, 8, 0 }) do
+						for _, offset in ipairs(offsets) do
+							local spot = here + offset + Vector3.new(0, height, 0)
+							if not workspace:Raycast(spot, aim - spot, sight) and #workspace:GetPartBoundsInRadius(spot, 2.5, params) == 0 then
+								best, bestRoom, seen = offset, height, true
+								break
+							end
+						end
+						if seen then break end
+					end
+				end
+				if seen then
+					-- (kept)
+				elseif bestRoom < want then
+					for _, radius in ipairs({ 8, 16, 28, 45 }) do
+						for step = 0, 7 do
+							local turn = step * math.pi / 4
+							local offset = Vector3.new(math.cos(turn) * radius, 0, math.sin(turn) * radius)
+							local space = room(offset)
+							if space > bestRoom then best, bestRoom = offset, space end
+							if bestRoom >= want then break end
+						end
+						if bestRoom >= want then break end
+					end
+				end
+				ghost.offset, ghost.rise, ghost.until_, ghost.want = best, bestRoom, now + 0.3, want
+			end
+			centre = cframe + ghost.offset + Vector3.new(0, ghost.rise, 0)
+			ghost.centre = centre.Position
+			-- the dodge: the body is thrown about inside a ball round that spot every step, so a shot aimed at
+			-- where they see it mostly misses; the ball stays under the 17-stud origin rule, so yours still land
+			local wobble = Config.get("monster.ghostJitter")
+			if decoying() then
+				-- (the decoy keeps still where it was left, and takes the firing place only while a shot is on)
+				ghost.decoy = true
+				if not ghost.home then ghost.home = cframe + Vector3.new(0, Config.get("monster.decoyUp"), 0) end
+				if os.clock() > ghost.strikeUntil then centre = ghost.home end
+			else
+				ghost.decoy = false
+			end
+			if ghosting() and wobble > 0 then
+				local spin, tilt = math.random() * math.pi * 2, math.random() * 2 - 1
+				local flat = math.sqrt(1 - tilt * tilt)
+				centre = centre + Vector3.new(math.cos(spin) * flat, tilt, math.sin(spin) * flat) * (wobble * math.random() ^ (1 / 3))
+			end
+		elseif Config.get("monster.fake") then
 			local far = Config.get("monster.fakeDistance")
 			local where = Config.get("monster.fakeWhere")
 			local flat = Vector3.new(cframe.LookVector.X, 0, cframe.LookVector.Z)
@@ -725,11 +856,13 @@ do
 		if not (root and active(character)) then
 			hideBox()
 			hunt.player = nil
+			ghost.shift, ghost.real, ghost.home, ghost.decoy = nil, nil, nil, false
 			return
 		end
 		real = root.CFrame
 		put = fakeOf(real)
-		if not put then return hideBox() end
+		if not put then ghost.shift = nil; return hideBox() end
+		if ghosting() or decoying() then ghost.shift, ghost.real = (ghost.centre or put.Position) - real.Position, real.Position else ghost.shift = nil end
 		root.CFrame = put
 		-- On target: a jump to a new place is waited out before firing, then every shot goes from here
 		if onTarget() and hunt.player then
@@ -759,8 +892,11 @@ do
 			jump:slider({ id = "monster.desyncRange", label = "How far", desc = "How far from you they see you.", min = 10, max = 150, step = 1, default = 40, suffix = " st" })
 			local fake = page:section({ title = "Fake position", icon = "map-pin", desc = "Others see you in one other place." })
 			fake:toggle({ id = "monster.fake", label = "Fake position", desc = "They see you there, you play here.", default = false })
-			fake:dropdown({ id = "monster.fakeWhere", label = "Where", desc = "On target sits by them and shoots.",
-				options = { { "target", "On target" }, { "below", "Below" }, { "behind", "Behind" }, { "side", "Side" }, { "above", "Above" } }, default = "target" })
+			fake:dropdown({ id = "monster.fakeWhere", label = "Where", desc = "Decoy: they see you stand still, you roam.",
+				options = { { "decoy", "Decoy" }, { "ghost", "Ghost" }, { "target", "On target" }, { "below", "Below" }, { "behind", "Behind" }, { "side", "Side" }, { "above", "Above" } }, default = "decoy" })
+			fake:slider({ id = "monster.decoyUp", label = "Decoy up", desc = "Decoy: raise it, out of reach (0 = where you stand).", min = 0, max = 250, step = 5, default = 0, suffix = " st" })
+			fake:slider({ id = "monster.ghostJitter", label = "Ghost dodge", desc = "Ghost: how far it jumps about. 0 is off.", min = 0, max = 14, step = 1, default = 10, suffix = " st" })
+			fake:slider({ id = "monster.ghostHeight", label = "Ghost height", desc = "Ghost: how high up they see you.", min = 30, max = 250, step = 5, default = 120, suffix = " st" })
 			fake:slider({ id = "monster.fakeNear", label = "From target", desc = "How close to them, on target.", min = 2, max = 12, step = 1, default = 4, suffix = " st" })
 			fake:slider({ id = "monster.fakeDistance", label = "How far", desc = "How far from you, the others.", min = 5, max = 200, step = 1, default = 40, suffix = " st" })
 			local both = page:section({ title = "Both", icon = "settings-2", desc = "Both stop while the ragebot hunts." })
