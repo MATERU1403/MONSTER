@@ -369,6 +369,42 @@ task.spawn(function()
 	end
 end)
 
+-- ---- The symbol: the fangs (logo/fangs.png, white on clear, tinted blood) left of the sidebar wordmark.
+-- The sidebar is built with the window, so it is waited for; the picture is fetched once and kept on disk.
+task.spawn(function()
+	local brand
+	local giveUp = os.clock() + 30
+	while not brand and os.clock() < giveUp and GUI.Parent do
+		for _, item in ipairs(GUI:GetDescendants()) do
+			if item.Name == "Brand" and item:IsA("Frame") and item.Parent and item.Parent.Name == "Sidebar" then brand = item; break end
+		end
+		if not brand then task.wait(0.5) end
+	end
+	if not brand or brand:FindFirstChild("MonsterFangs") then return end
+	local file = "monster_fangs_v1.png"
+	if not (isfile and isfile(file)) then
+		local ok, data = pcall(game.HttpGet, game, "https://raw.githubusercontent.com/MATERU1403/MONSTER/main/logo/fangs.png")
+		if not (ok and type(data) == "string" and #data > 100) then return end
+		pcall(writefile, file, data)
+	end
+	local okId, id = pcall(getcustomasset, file)
+	if not okId then return end
+	local mark
+	for _, item in ipairs(brand:GetChildren()) do
+		if item:IsA("Frame") and item.AutomaticSize == Enum.AutomaticSize.X then mark = item; break end
+	end
+	local fangs = Instance.new("ImageLabel")
+	fangs.Name = "MonsterFangs"
+	fangs.BackgroundTransparency = 1
+	fangs.Image = id
+	fangs.ImageColor3 = Color3.fromRGB(205, 0, 26)
+	fangs.ScaleType = Enum.ScaleType.Fit
+	fangs.Size = UDim2.fromOffset(34, 16)
+	fangs.Position = UDim2.fromOffset(16, 23)
+	fangs.Parent = brand
+	if mark then mark.Position = UDim2.fromOffset(56, mark.Position.Y.Offset) end
+end)
+
 -- ---- Letters: page titles in a blackletter, headings heavier, the wordmark in blood (above)
 task.spawn(function()
 	local F, F0 = B.F, rawget(B, "F0")
