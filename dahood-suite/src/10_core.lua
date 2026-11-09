@@ -171,6 +171,7 @@ do
 		{ "INTERP", 0.18, 0, 0.6, 0.005, "net", "Roblox's interpolation buffer in seconds (lead = ping + this). Measured 2026-11-09 on Volt, two alts: 0.180 s (total shift 0.240 s, pings 59 ms)." },
 		{ "NET_FAIL_COUNT", 20, 3, 200, 1, "net", "Send failures inside the window that count as raknet being denied." },
 		{ "NET_FAIL_WINDOW", 2, 0.5, 10, 0.5, "net", "Seconds of the send-failure window." },
+		{ "NET_UNPARSED_QUIET", 0.75, 0.1, 5, 0.05, "net", "Fake position pauses (the engine's own packets flow) while the body sends a layout the codec cannot read, and for this long after. Crafting on another layout's header was a route to error 260." },
 		{ "VOID_BAIT", 0.1, 0, 2, 0.05, "void", "Seconds the body is still shown before it goes (bait delay)." },
 		{ "VOID_HOLD", 0.6, 0.1, 5, 0.05, "void", "Seconds with no threat near before the void is let go." },
 		{ "VOID_PEEK", 0.12, 0.02, 1, 0.02, "void", "Seconds the body comes back between respawn holds." },

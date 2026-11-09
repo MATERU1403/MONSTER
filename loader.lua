@@ -2122,7 +2122,7 @@ end)()
 -- (shared scope)
 -- ---- core: shared helpers, the K table, config, cleanup list, logging
 local genv = getgenv()
-DH.version, DH.build = "1.0", "20261109.1400"
+DH.version, DH.build = "1.0", "20261109.1425"
 DH.GAME_ID = 1008451066
 DH.isDaHood = game.GameId == DH.GAME_ID
 DH.errors, DH.logs = 0, {}
@@ -2293,6 +2293,7 @@ do
 		{ "INTERP", 0.18, 0, 0.6, 0.005, "net", "Roblox's interpolation buffer in seconds (lead = ping + this). Measured 2026-11-09 on Volt, two alts: 0.180 s (total shift 0.240 s, pings 59 ms)." },
 		{ "NET_FAIL_COUNT", 20, 3, 200, 1, "net", "Send failures inside the window that count as raknet being denied." },
 		{ "NET_FAIL_WINDOW", 2, 0.5, 10, 0.5, "net", "Seconds of the send-failure window." },
+		{ "NET_UNPARSED_QUIET", 0.75, 0.1, 5, 0.05, "net", "Fake position pauses (the engine's own packets flow) while the body sends a layout the codec cannot read, and for this long after. Crafting on another layout's header was a route to error 260." },
 		{ "VOID_BAIT", 0.1, 0, 2, 0.05, "void", "Seconds the body is still shown before it goes (bait delay)." },
 		{ "VOID_HOLD", 0.6, 0.1, 5, 0.05, "void", "Seconds with no threat near before the void is let go." },
 		{ "VOID_PEEK", 0.12, 0.02, 1, 0.02, "void", "Seconds the body comes back between respawn holds." },
@@ -2601,7 +2602,7 @@ local Net = {
 	on = false, available = false, denied = false, reason = nil,
 	sent = 0, failed = 0, blocked = 0, unparsed = 0, noHeader = 0, hookFaults = 0,
 	layouts = {}, hooks = { send = false, receive = false }, rxNames = {}, mode = "craft",
-	rate = 0, lastHold = 0,
+	rate = 0, lastHold = 0, seen = {}, skipped = 0,
 }
 DH.Net = Net
 genv.MONSTER_RAK = Net -- (what a test reads: on / sent / failed / blocked / available)
@@ -2611,6 +2612,47 @@ local header, lastStamp, lastClock, needHeader = nil, 0, 0, false
 local acc, want = 0, nil
 local failStamps, rateCount, rateSince = {}, 0, os.clock()
 local hookFn
+local lastUnparsed = -math.huge -- when the engine last sent a body packet this codec cannot read (another layout)
+
+---Byte positions (6-34, the header) where two body packets differ: tells whether another layout carries another header.
+local function headerDiff(a, b)
+	local out = {}
+	for i = 6, 34 do
+		if string.byte(a, i) ~= string.byte(b, i) then
+			out[#out + 1] = i
+			if #out >= 8 then break end
+		end
+	end
+	return out
+end
+
+-- ---- flight recorder: the last events before a disconnect, kept on disk (a server kick ends the client; the file stays)
+-- E = a body packet the engine sent (len, decoded?, studs from the real body, blocked?), S = one of ours (stamp, payload, header when it changed),
+-- F = a send that failed, H = hold / release / denied. Written at most 4 times a second, and only while a hold is on (or 4 s after).
+local FLIGHT_MAX, flightRing, flightDirty, flightWrote, flightStart, flightHeader = 160, {}, false, 0, os.clock(), nil
+local function hex(s)
+	local out = table.create(#s)
+	for i = 1, #s do out[i] = string.format("%02x", string.byte(s, i)) end
+	return table.concat(out)
+end
+local function flightActive() return Net.on or os.clock() - Net.lastHold < 4 end
+local function flight(entry)
+	entry.t = math.floor((os.clock() - flightStart) * 1000) / 1000
+	flightRing[#flightRing + 1] = entry
+	if #flightRing > FLIGHT_MAX then table.remove(flightRing, 1) end
+	flightDirty = true
+end
+local function flightWrite(force)
+	local now = os.clock()
+	if not flightDirty or (not force and now - flightWrote < 0.25) then return end
+	flightDirty, flightWrote = false, now
+	local n = Net.status()
+	pcall(writefile, "monster-build/results/net_flight.json", S.Http:JSONEncode({
+		user = DH.LP.Name, at = workspace:GetServerTimeNow(), clock = flightStart,
+		net = { sent = n.sent, failed = n.failed, blocked = n.blocked, unparsed = n.unparsed, skipped = n.skipped, on = n.on, denied = n.denied, reason = n.reason, layouts = n.layouts, seen = n.seen },
+		ring = flightRing,
+	}))
+end
 
 -- ---- what raknet offers
 local function scanRaknet()
@@ -2636,6 +2678,8 @@ function Net.deny(reason)
 	if Net.denied then return end
 	Net.denied, Net.reason, Net.available, Net.on = true, reason, false, false
 	want = nil
+	flight({ k = "H", ev = "deny", why = reason })
+	flightWrite(true)
 	DH.warn("net.denied", reason, 0.1)
 	DH.fire("net-denied", reason)
 end
@@ -2655,11 +2699,25 @@ local function onSend(packet)
 	if #s < 36 then return end
 	local parsed = Codec.parse(s)
 	if not parsed then
-		-- not a layout that was captured: pass it through, remember the header of the body, say so once
+		-- not a layout that was captured: pass it through. Its header is NOT taken as the one to craft with (a body in another
+		-- layout has other header bytes, and a packet built on them is one the server cannot read: error 260), and crafting
+		-- pauses until the engine's own packets decode again (Net.layoutKnown).
 		Net.unparsed += 1
-		header = string.sub(s, 1, 34)
-		DH.warn("net.unparsed", "a 0xA1 packet of " .. #s .. " bytes did not decode; passed through", 30)
+		lastUnparsed = os.clock()
+		local seen = Net.seen[#s]
+		if not seen then seen = { n = 0 }; Net.seen[#s] = seen end
+		seen.n += 1
+		if header and (seen.n == 1 or seen.n % 100 == 0) then seen.diff = headerDiff(s, header) end
+		if flightActive() then flight({ k = "E", len = #s, ok = false, stamp = string.unpack("<I4", s, 2) }) end
+		DH.warn("net.unparsed", "a 0xA1 packet of " .. #s .. " bytes did not decode; passed through, crafting paused", 30)
 		return
+	end
+	if flightActive() then
+		local root = DH.root()
+		local at = root and root.Position
+		flight({ k = "E", len = #s, ok = true, stamp = parsed.stamp, blocked = Net.on and not Net.denied or false,
+			d = at and math.floor(math.sqrt((parsed.x - at.X) ^ 2 + (parsed.y - at.Y) ^ 2 + (parsed.z - at.Z) ^ 2) * 100) / 100 or nil,
+			hd = header and #headerDiff(s, header) or nil })
 	end
 	if parsed.stamp > lastStamp then lastStamp, lastClock = parsed.stamp, os.clock() end
 	header, needHeader = string.sub(s, 1, 34), false
@@ -2705,6 +2763,10 @@ pcall(function()
 	end), "net.errorprompt")
 end)
 
+---True while every body packet the engine sends is one this codec reads (none unreadable in the last NET_UNPARSED_QUIET seconds).
+---Crafted packets are only sent then: the header they borrow, and the layout the server expects, are the ones that were measured.
+function Net.layoutKnown() return os.clock() - lastUnparsed > DH.K.get("NET_UNPARSED_QUIET") end
+
 -- ---- sending
 ---Send one body packet: the live header, a new stamp, and `framed` (length + payload).
 local function sendFramed(framed)
@@ -2715,8 +2777,15 @@ local function sendFramed(framed)
 	local stamp = math.max(lastStamp + 1, lastStamp + math.floor((os.clock() - lastClock) * 240))
 	local packet = Codec.build(header, stamp, framed)
 	if not pcall(rk.send, buffer.fromstring(packet)) then
+		flight({ k = "F", stamp = stamp, pl = hex(string.sub(framed, 3)) })
 		noteFailure()
 		return false
+	end
+	do
+		local entry = { k = "S", stamp = stamp, n = Net.sent + 1, pl = hex(string.sub(framed, 3)) }
+		local hh = hex(string.sub(header, 6))
+		if hh ~= flightHeader then flightHeader, entry.hdr = hh, hh end
+		flight(entry)
 	end
 	lastStamp, lastClock = stamp, os.clock()
 	Net.sent += 1
@@ -2731,6 +2800,7 @@ end
 ---@return boolean
 function Net.send(cframe)
 	if Net.denied then return false end
+	if not Net.layoutKnown() then Net.skipped += 1; return false end
 	local p = cframe.Position
 	local look = cframe.LookVector
 	local payload = Codec.payload(p.X, p.Y, p.Z, math.atan2(-look.X, -look.Z))
@@ -2748,7 +2818,14 @@ end
 ---@param everyStep boolean? send on every call, not at the chosen rate
 function Net.hold(cframe, root, dt, everyStep)
 	if Net.denied or not Net.available then return end
+	if not Net.layoutKnown() then
+		-- the engine is sending a body layout this codec does not know: no packet of ours, and the engine's own flow again
+		Net.skipped += 1
+		if Net.on then Net.on, want, acc = false, nil, 0 end
+		return
+	end
 	local first = not Net.on
+	if first then flight({ k = "H", ev = "on", at = { math.floor(cframe.X), math.floor(cframe.Y), math.floor(cframe.Z) }, header = header ~= nil, rate = DH.get("monster.rakRate") }) end
 	Net.on, want = true, cframe
 	Net.lastHold = os.clock()
 	if not header and root then
@@ -2771,6 +2848,8 @@ function Net.release(cframe)
 	if not Net.on then return end
 	if cframe then Net.send(cframe) end
 	Net.on, want, acc = false, nil, 0
+	flight({ k = "H", ev = "off" })
+	flightWrite(true)
 end
 
 ---The server body as the API asks for it: a CFrame holds it (the fake-position driver does the sending), nil lets go.
@@ -2779,7 +2858,7 @@ function Net.setServerCFrame(cframe)
 end
 
 function Net.needsHeader() return needHeader end
-function Net.ready() return Net.available and not Net.denied and header ~= nil end
+function Net.ready() return Net.available and not Net.denied and header ~= nil and Net.layoutKnown() end
 
 -- ---- incoming: Volt has no receive hook, so other players' bodies are read as the engine shows them, once a frame
 do
@@ -2902,6 +2981,7 @@ function Net.init()
 	DH.janitor:add(S.Run.Heartbeat:Connect(function()
 		-- a held body whose driver stopped asking is let go (a stalled loop must not leave the server body behind)
 		local now = os.clock()
+		flightWrite(false)
 		if Net.on and now - Net.lastHold > 0.5 then
 			DH.warn("net.stale", "hold went stale: releasing", 5)
 			local root = DH.root()
@@ -2928,7 +3008,7 @@ function Net.status()
 	return {
 		available = Net.available, denied = Net.denied, reason = Net.reason, on = Net.on, hooks = Net.hooks, rxNames = Net.rxNames,
 		sent = Net.sent, failed = Net.failed, blocked = Net.blocked, unparsed = Net.unparsed, noHeader = Net.noHeader, hookFaults = Net.hookFaults,
-		rate = math.floor(Net.rate * 10) / 10, layouts = Net.layouts, headerKnown = header ~= nil, incoming = Net.incomingSource, mode = Net.mode,
+		rate = math.floor(Net.rate * 10) / 10, layouts = Net.layouts, seen = Net.seen, skipped = Net.skipped, layoutKnown = Net.layoutKnown(), headerKnown = header ~= nil, incoming = Net.incomingSource, mode = Net.mode,
 	}
 end
 DH.register("net", Net)
