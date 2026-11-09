@@ -256,7 +256,9 @@ function Rage.canFire(entry, gun, aim, now)
 	if dist > Rage.gunRange(gun) then return false, "out of range" end
 	-- arrival: the server counts shots from a new place only after a delay (0.10-0.23 s measured); riding and strikes handle their own
 	local void = DH.Void.active()
-	if not void and not DH.Physrep.isAttached() and now - Rage.spotSince < DH.K.get("RAGE_ARRIVE") then return false, "arriving" end
+	-- (the wait follows the ping, capped by RAGE_ARRIVE: a fixed 0.25 s equalled the ring's own hold, so a shot almost never got a window)
+	local arrive = math.min(DH.K.get("RAGE_ARRIVE"), math.clamp(DH.ping() + DH.K.get("RAGE_ARRIVE_PAD"), 0.08, 0.4))
+	if not void and not DH.Physrep.isAttached() and now - Rage.spotSince < arrive then return false, "arriving" end
 	if opt("snipe") and dist > 150 and entry.root.AssemblyLinearVelocity.Magnitude > 2 then return false, "snipe: target is moving" end
 	if now - Rage.lastSight.t > 0.1 then
 		Rage.lastSight = { t = now, ok = clear(origin, aim.pos, DH.character(), entry.character) }
@@ -429,11 +431,12 @@ local function step(dt)
 	local now = os.clock()
 	if not Rage.on() then
 		if Rage.entry or Rage.stompingNow then Rage.stop() end
-		Rage.autoPaused = nil
+		Rage.autoPaused, Rage.why = nil, "off"
 		return
 	end
 	Rage.autoPaused = autoPauseReason()
 	if Rage.paused or Rage.autoPaused then
+		Rage.why = "paused: " .. (Rage.paused and "by a plugin" or tostring(Rage.autoPaused))
 		DH.Fakepos.clearSource("rage")
 		if Rage.entry then Rage.entry, Rage.player = nil, nil end
 		if DH.Physrep.isAttached() then DH.Physrep.detach("ragebot paused") end
@@ -442,6 +445,7 @@ local function step(dt)
 	local entry = Rage.pick(now)
 	DH.Fakepos.setSource("rage", function(real) return Rage.stand(real) end)
 	if not entry then
+		Rage.why = "no target"
 		Rage.stompingNow = false
 		if DH.Physrep.isAttached() then DH.Physrep.detach("no target") end
 		DH.Void.setWaiting(true)
@@ -473,16 +477,18 @@ local function step(dt)
 	end
 
 	if entry.ko then
+		Rage.why = opt("stomp") and "target down: stomping" or "target down"
 		stompStep(entry, now)
 		return
 	end
 	realBody(entry, now)
 	local gun = Rage.pickGun(dist)
-	if not gun then return end
-	if not equip(gun, now) then return end
-	local aim = Rage.aim(entry, gun)
-	if not aim then return end
-	local ok = Rage.canFire(entry, gun, aim, now)
+	if not gun then Rage.why = "no gun with a round or spare ammo"; return end
+	if not equip(gun, now) then Rage.why = "equipping " .. gun.Name; return end
+	local aim, aimWhy = Rage.aim(entry, gun)
+	if not aim then Rage.why = "aim: " .. tostring(aimWhy); return end
+	local ok, why = Rage.canFire(entry, gun, aim, now)
+	Rage.why = ok and "firing" or tostring(why)
 	if ok then Rage.shoot(gun, entry, aim, now) end
 	if opt("autoReload") and gun.Ammo.Value <= DH.K.get("RAGE_RELOAD_AT") then Rage.reload(gun, now) end
 end
@@ -497,7 +503,7 @@ function Rage.status()
 	return {
 		on = Rage.on(), paused = Rage.paused, autoPaused = Rage.autoPaused, target = Rage.player and Rage.player.Name or nil,
 		ko = entry and entry.ko or nil, fired = Rage.fired, stomps = Rage.stomps, reloads = Rage.reloads, kills = Rage.kills,
-		riding = DH.Physrep and DH.Physrep.isAttached() or false, override = Rage.override ~= nil,
+		riding = DH.Physrep and DH.Physrep.isAttached() or false, override = Rage.override ~= nil, why = Rage.why,
 	}
 end
 DH.register("ragebot", Rage)

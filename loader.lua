@@ -1013,7 +1013,7 @@ return function(env)
 		-- animation / state cues
 		stillDisp = 1.0, stillVel = 0.5, cueMin = 0.4, maxWalk = 40,
 		-- pattern recognition
-		hopMin = 6, minHops = 3, clusterMinSep = 8, ringRadiusMin = 3, ringResidual = 0.35, skyHeight = 50, groundAt = nil,
+		hopMin = 6, hopRate = 0.35, clusterMinSep = 8, ringRadiusMin = 3, ringResidual = 0.35,
 		-- combiner
 		agreeSigma = 6, minConfidence = 0.35,
 	}
@@ -1281,23 +1281,14 @@ return function(env)
 		cfg = cfgOf(cfg)
 		local n = #list
 		if n < cfg.minSamples then return nil end
-		-- One point per PLACE the body stood (samples within a stud and a half of where a stay began are one stay), so a jitter that
-		-- re-rolls every 120 ms shows as hops between places however fast the samples come. A walking body only moves a stud or two
-		-- from one stay to the next, never a hop.
-		local points, cur = {}, nil
-		for _, sample in ipairs(list) do
-			if finite(sample.pos) and not (cur and (sample.pos - cur).Magnitude <= 1.5) then
-				cur = sample.pos
-				points[#points + 1] = sample.pos
-			end
+		local points, hops = {}, 0
+		for i, sample in ipairs(list) do
+			if finite(sample.pos) then points[#points + 1] = sample.pos end
+			if i > 1 and finite(sample.pos) and finite(list[i - 1].pos) and (sample.pos - list[i - 1].pos).Magnitude > cfg.hopMin then hops += 1 end
 		end
-		if #points < 4 then return nil end
-		local hops = 0
-		for i = 2, #points do
-			if (points[i] - points[i - 1]).Magnitude > cfg.hopMin then hops += 1 end
-		end
-		if hops < cfg.minHops then return nil end
+		if #points < cfg.minSamples then return nil end
 		local rate = hops / max(#points - 1, 1)
+		if rate < cfg.hopRate then return nil end
 		if #points > 40 then
 			-- (the newest 40 are enough to see a pattern, and the clustering is quadratic)
 			local keep = {}
@@ -1320,20 +1311,12 @@ return function(env)
 			return { pos = pick, confidence = min(0.8, 0.35 + rate * 0.4) * (hint and 1 or 0.7), method = "pattern", kind = "blink", rate = rate, share = share }
 		end
 
-		-- a ring or a disk about the body: its middle is the body. A ring high over the map (an orbit in the sky) says where the body is
-		-- along the ground, not how high: with a ground lookup the height is the ground's (+3) when the ring is far above it.
-		local function lift(x, z, y)
-			if cfg.groundAt then
-				local ok, ground = pcall(cfg.groundAt, x, z)
-				if ok and type(ground) == "number" and y - ground > cfg.skyHeight then return ground + 3 end
-			end
-			return y
-		end
+		-- a ring or a disk about the body: its middle is the body
 		local cx, cz, r, resid = fitCircle(points)
 		if cx and r > cfg.ringRadiusMin and resid / r < cfg.ringResidual then
-			return { pos = Vector3.new(cx, lift(cx, cz, median(ys)), cz), confidence = min(0.85, 0.4 + rate * 0.4) * (1 - 0.5 * resid / r), method = "pattern", kind = "ring", rate = rate, radius = r }
+			return { pos = Vector3.new(cx, median(ys), cz), confidence = min(0.85, 0.4 + rate * 0.4) * (1 - 0.5 * resid / r), method = "pattern", kind = "ring", rate = rate, radius = r }
 		end
-		return { pos = Vector3.new(centroid.X, lift(centroid.X, centroid.Z, median(ys)), centroid.Z), confidence = min(0.7, 0.3 + rate * 0.35), method = "pattern", kind = "scatter", rate = rate }
+		return { pos = Vector3.new(centroid.X, median(ys), centroid.Z), confidence = min(0.7, 0.3 + rate * 0.35), method = "pattern", kind = "scatter", rate = rate }
 	end
 
 	-- ---- learning: per target, per method weights nudged by whether shots at the guess did damage
@@ -2139,7 +2122,7 @@ end)()
 -- (shared scope)
 -- ---- core: shared helpers, the K table, config, cleanup list, logging
 local genv = getgenv()
-DH.version, DH.build = "1.0", "20261109.1331"
+DH.version, DH.build = "1.0", "20261109.1400"
 DH.GAME_ID = 1008451066
 DH.isDaHood = game.GameId == DH.GAME_ID
 DH.errors, DH.logs = 0, {}
@@ -2341,7 +2324,8 @@ do
 		{ "DEF_FLAME", 25, 5, 100, 1, "defense", "A flamethrower reaches this far (studs)." },
 		{ "DEF_GUN", 300, 50, 1000, 10, "defense", "A gun counts out to this range (studs)." },
 		{ "DEF_TELE", 80, 20, 400, 5, "defense", "A jump this big in a sample is a teleport (studs)." },
-		{ "RAGE_ARRIVE", 0.25, 0.05, 1, 0.01, "rage", "Seconds the server must have the body at a new place before a shot is sent." },
+		{ "RAGE_ARRIVE", 0.25, 0.05, 1, 0.01, "rage", "Longest wait (s) after the server body hops before a shot is sent. The ping plus the pad below is used when it is shorter." },
+		{ "RAGE_ARRIVE_PAD", 0.06, 0, 0.3, 0.01, "rage", "Added to the ping for the wait after a hop. Measured: a hop needs 0.10-0.23 s; the 0.25 s ring hold left no window at all (88 of 89 samples 'arriving')." },
 		{ "RAGE_RANGE", 250, 30, 900, 10, "rage", "Longest shot (studs) when the weapon does not say." },
 		{ "RAGE_STOMP", 3, 1.5, 9, 0.5, "rage", "Stomp height above the target (studs)." },
 		{ "RAGE_RELOAD_AT", 0, 0, 10, 1, "rage", "Reload when the magazine is at or below this (0 = only when empty)." },
@@ -2627,9 +2611,6 @@ local header, lastStamp, lastClock, needHeader = nil, 0, 0, false
 local acc, want = 0, nil
 local failStamps, rateCount, rateSince = {}, 0, os.clock()
 local hookFn
-local pendingRelease -- { left, nextAt, fallback }: the real place still to be sent after a release
-local mine, mineOrder, nextNudge = {}, {}, 0 -- stamps of the packets sent here (so the hook can tell them from the engine's)
-Net.releases, Net.nudgeUntil, Net.selfSeen, Net.sentLog = 0, 0, 0, {}
 
 -- ---- what raknet offers
 local function scanRaknet()
@@ -2680,15 +2661,8 @@ local function onSend(packet)
 		DH.warn("net.unparsed", "a 0xA1 packet of " .. #s .. " bytes did not decode; passed through", 30)
 		return
 	end
-	-- one of the packets this module sent (seen by the hook on one run, 2026-11-09, which ended in error 260): let it through untouched,
-	-- and never take its header or stamp for a real body's
-	if mine[parsed.stamp] then
-		Net.selfSeen += 1
-		return
-	end
 	if parsed.stamp > lastStamp then lastStamp, lastClock = parsed.stamp, os.clock() end
 	header, needHeader = string.sub(s, 1, 34), false
-	Net.headerFrom = { len = parsed.len, tag = parsed.tag, stamp = parsed.stamp, at = os.clock() }
 	Net.layouts[parsed.len] = (Net.layouts[parsed.len] or 0) + 1
 	if Net.on and not Net.denied then
 		packet:Block()
@@ -2740,19 +2714,11 @@ local function sendFramed(framed)
 	end
 	local stamp = math.max(lastStamp + 1, lastStamp + math.floor((os.clock() - lastClock) * 240))
 	local packet = Codec.build(header, stamp, framed)
-	mine[stamp] = true
-	mineOrder[#mineOrder + 1] = stamp
-	if #mineOrder > 240 then mine[table.remove(mineOrder, 1)] = nil end
 	if not pcall(rk.send, buffer.fromstring(packet)) then
-		mine[stamp] = nil
 		noteFailure()
 		return false
 	end
 	lastStamp, lastClock = stamp, os.clock()
-	-- what was sent, newest last (the first 12 of a hold and the last 12 are what a post-mortem needs)
-	local log = Net.sentLog
-	log[#log + 1] = string.format("%.3f s=%d %s", os.clock(), stamp, Codec.hex(packet, 37, 14))
-	if #log > 24 then table.remove(log, 1) end
 	Net.sent += 1
 	rateCount += 1
 	local now = os.clock()
@@ -2782,57 +2748,29 @@ end
 ---@param everyStep boolean? send on every call, not at the chosen rate
 function Net.hold(cframe, root, dt, everyStep)
 	if Net.denied or not Net.available then return end
-	local now = os.clock()
-	Net.lastHold = now
-	if not header and root then
-		-- A body standing still sends nothing: a 0.02-stud shift makes the engine send one, which is read for its header. Until one has
-		-- been read nothing is blocked (the engine's packets go on to the server), and the shift is made once per 0.15 s, not every frame
-		-- (a run that nudged and blocked five packets in a row before it sent anything ended in error 260).
-		needHeader = true
-		if now >= nextNudge then
-			nextNudge = now + 0.15
-			root.CFrame = root.CFrame + Vector3.new(0.02, 0, 0)
-		end
-		return
-	end
 	local first = not Net.on
 	Net.on, want = true, cframe
-	if first then
-		-- the first packet of a hold is the real place: the server's picture of this body is continuous before it is moved
-		local rootNow = root or DH.root()
-		Net.ramp = 2
-		if rootNow then Net.send(rootNow.CFrame) end
+	Net.lastHold = os.clock()
+	if not header and root then
+		-- (a body standing still sends nothing: a 0.02-stud shift makes one, which is blocked and read)
+		needHeader = true
+		root.CFrame = root.CFrame + Vector3.new(0.02, 0, 0)
+		return
 	end
 	acc += dt
 	local rate = DH.get("monster.rakRate") or 30
 	if first or everyStep or acc >= 1 / math.max(rate, 5) then
 		acc = 0
-		if Net.ramp and Net.ramp > 0 then
-			-- two more at the real place (a hold that starts with a jump of 900 studs is a different stream from one that eases in)
-			Net.ramp -= 1
-			local rootNow = root or DH.root()
-			if rootNow then Net.send(rootNow.CFrame) end
-		else
-			Net.send(want)
-		end
+		Net.send(want)
 	end
 end
 
----Let go: the server is given the real place, then the body's own packets flow again.
----MEASURED 2026-11-09: a void was cleared and the other client still saw the body at its last sky spot 3.4 s later. A body that stands
----still sends nothing, so one lost (or ignored) release packet leaves the server body stranded. So the real place is sent three more
----times, 0.1 s apart, and the body is shifted 0.02 studs a frame for 0.8 s so the engine sends its own packet too.
+---Let go: the server is given the real place once, then the body's own packets flow again.
 ---@param cframe CFrame?
 function Net.release(cframe)
 	if not Net.on then return end
-	if cframe then
-		Net.send(cframe)
-		pendingRelease = { left = 3, nextAt = os.clock() + 0.1, fallback = cframe }
-	end
+	if cframe then Net.send(cframe) end
 	Net.on, want, acc = false, nil, 0
-	Net.nudgeUntil = os.clock() + 0.8
-	Net.releases += 1
-	Net.lastRelease = { t = os.clock(), x = cframe and cframe.X, y = cframe and cframe.Y, z = cframe and cframe.Z }
 end
 
 ---The server body as the API asks for it: a CFrame holds it (the fake-position driver does the sending), nil lets go.
@@ -2961,26 +2899,6 @@ local lastCheck = 0
 function Net.init()
 	scanRaknet()
 	if Net.available then installHook() end
-	local sign = 1
-	DH.janitor:add(S.Run.PreSimulation:Connect(DH.safe("net.nudge", function()
-		if os.clock() < Net.nudgeUntil and not Net.on then
-			local root = DH.root()
-			if root then sign = -sign; root.CFrame = root.CFrame + Vector3.new(0.02 * sign, 0, 0) end
-		end
-	end)), "net.nudge")
-	DH.janitor:add(S.Run.Heartbeat:Connect(DH.safe("net.release", function()
-		local r = pendingRelease
-		if not r then return end
-		if Net.on then pendingRelease = nil; return end
-		local now = os.clock()
-		if now >= r.nextAt then
-			local root = DH.root()
-			Net.send(root and root.CFrame or r.fallback)
-			r.left -= 1
-			r.nextAt = now + 0.1
-			if r.left <= 0 then pendingRelease = nil end
-		end
-	end)), "net.release")
 	DH.janitor:add(S.Run.Heartbeat:Connect(function()
 		-- a held body whose driver stopped asking is let go (a stalled loop must not leave the server body behind)
 		local now = os.clock()
@@ -3011,7 +2929,6 @@ function Net.status()
 		available = Net.available, denied = Net.denied, reason = Net.reason, on = Net.on, hooks = Net.hooks, rxNames = Net.rxNames,
 		sent = Net.sent, failed = Net.failed, blocked = Net.blocked, unparsed = Net.unparsed, noHeader = Net.noHeader, hookFaults = Net.hookFaults,
 		rate = math.floor(Net.rate * 10) / 10, layouts = Net.layouts, headerKnown = header ~= nil, incoming = Net.incomingSource, mode = Net.mode,
-		releases = Net.releases, lastRelease = Net.lastRelease, selfSeen = Net.selfSeen, headerFrom = Net.headerFrom, sentLog = Net.sentLog,
 	}
 end
 DH.register("net", Net)
@@ -3212,7 +3129,7 @@ DH.Void = Void
 
 DH.define("monster.void.position", { kind = "dropdown", default = "sky", label = "Void position", group = "void",
 	desc = "Sky: a random place high over the map, sent by raknet. Far: a body swap a billion studs out. NaN 1 / NaN 2: the two big constants. Orbit: the strafe.",
-	options = { { "sky", "Sky (raknet)" }, { "far", "Far (body swap)" }, { "nan1", "NaN 1" }, { "nan2", "NaN 2" }, { "orbit", "Orbit strafe" } } })
+	options = { { "sky", "Sky (raknet, safe)" }, { "far", "Far (body swap)" }, { "nan1", "NaN 1 (clamped)" }, { "nan2", "NaN 2 (clamped)" }, { "orbit", "Orbit strafe" } } })
 DH.define("monster.void.protect", { kind = "toggle", default = false, label = "Void when threatened", desc = "Go to the void while an armed player is near, come back after a calm hold.", group = "void" })
 DH.define("monster.void.whenDead", { kind = "toggle", default = true, label = "Void when the target dies", desc = "Hide for a few seconds after a knock.", group = "void" })
 DH.define("monster.void.whileWaiting", { kind = "toggle", default = false, label = "Void while waiting", desc = "Hide while the ragebot has nothing to shoot or is reloading.", group = "void" })
@@ -3238,13 +3155,30 @@ end
 ---"orbit" and "orbit-thunder" are what the ragebot's strafe forces; otherwise the setting.
 function Void.style() return Void.forceStyle or DH.get("monster.void.position") end
 
----Where the body swap puts the server body for `style` (a Vector3). The sky box and the far box are the measured ones.
+---A body swap writes this to the REAL body, so it must stay a number the engine and the server can carry: the two big constants
+---(1e29 and up) are what ends in "Error 260" (the server cannot read the position), so they are never written, only used as a style name.
+Void.SWAP_MAX = 2e9 -- (the far box's own limit, measured to hold)
+function Void.safe(v)
+	if typeof(v) ~= "Vector3" then return nil end
+	local m = Void.SWAP_MAX
+	if v.X ~= v.X or v.Y ~= v.Y or v.Z ~= v.Z then return nil end -- NaN
+	if math.abs(v.X) > m or math.abs(v.Y) > m or math.abs(v.Z) > m then return nil end -- inf and anything past the limit
+	return v
+end
+
+---Where the body swap puts the server body for `style` (a Vector3). The sky box and the far box are the measured ones;
+---NaN 1 / NaN 2 land in the far box too (guarded: `Void.guarded` counts how often a big constant was turned down).
 function Void.spot(style)
 	local r = Void.rng
-	if style == "nan1" then return Void.NAN1 end
-	if style == "nan2" then return Void.NAN2 end
-	if style == "far" then return Vector3.new(r:NextNumber(-1.5e9, 1.5e9), r:NextNumber(4e8, 2e9), r:NextNumber(-1.5e9, 1.5e9)) end
-	return Vector3.new(r:NextNumber(-1000, 1000), r:NextNumber(600, 1000), r:NextNumber(-1000, 1000))
+	local want
+	if style == "nan1" or style == "nan2" then
+		Void.guarded = (Void.guarded or 0) + 1
+		DH.warn("void.guard", "NaN void swapped for the far box (a 1e29 body swap ends in error 260)", 30)
+		style = "far"
+	end
+	if style == "far" then want = Vector3.new(r:NextNumber(-1.5e9, 1.5e9), r:NextNumber(4e8, 2e9), r:NextNumber(-1.5e9, 1.5e9))
+	else want = Vector3.new(r:NextNumber(-1000, 1000), r:NextNumber(600, 1000), r:NextNumber(-1000, 1000)) end
+	return Void.safe(want) or Vector3.new(0, 800, 0)
 end
 
 ---The key's request: Hold, Toggle or Always are handled by the key module, which calls this.
@@ -3297,7 +3231,7 @@ function Void.disable()
 end
 function Void.status()
 	local s = Void.state
-	return { active = Void.active(), phase = s.phase, holdLeft = s.holdLeft, ramp = s.ramp, wanted = s.wanted, style = Void.style(), ramps = Void.ramps, releases = Void.sm.releases }
+	return { active = Void.active(), phase = s.phase, holdLeft = s.holdLeft, ramp = s.ramp, wanted = s.wanted, style = Void.style(), ramps = Void.ramps, releases = Void.sm.releases, guarded = Void.guarded or 0 }
 end
 DH.register("void", Void)
 end
@@ -3682,7 +3616,9 @@ function Rage.canFire(entry, gun, aim, now)
 	if dist > Rage.gunRange(gun) then return false, "out of range" end
 	-- arrival: the server counts shots from a new place only after a delay (0.10-0.23 s measured); riding and strikes handle their own
 	local void = DH.Void.active()
-	if not void and not DH.Physrep.isAttached() and now - Rage.spotSince < DH.K.get("RAGE_ARRIVE") then return false, "arriving" end
+	-- (the wait follows the ping, capped by RAGE_ARRIVE: a fixed 0.25 s equalled the ring's own hold, so a shot almost never got a window)
+	local arrive = math.min(DH.K.get("RAGE_ARRIVE"), math.clamp(DH.ping() + DH.K.get("RAGE_ARRIVE_PAD"), 0.08, 0.4))
+	if not void and not DH.Physrep.isAttached() and now - Rage.spotSince < arrive then return false, "arriving" end
 	if opt("snipe") and dist > 150 and entry.root.AssemblyLinearVelocity.Magnitude > 2 then return false, "snipe: target is moving" end
 	if now - Rage.lastSight.t > 0.1 then
 		Rage.lastSight = { t = now, ok = clear(origin, aim.pos, DH.character(), entry.character) }
@@ -3855,11 +3791,12 @@ local function step(dt)
 	local now = os.clock()
 	if not Rage.on() then
 		if Rage.entry or Rage.stompingNow then Rage.stop() end
-		Rage.autoPaused = nil
+		Rage.autoPaused, Rage.why = nil, "off"
 		return
 	end
 	Rage.autoPaused = autoPauseReason()
 	if Rage.paused or Rage.autoPaused then
+		Rage.why = "paused: " .. (Rage.paused and "by a plugin" or tostring(Rage.autoPaused))
 		DH.Fakepos.clearSource("rage")
 		if Rage.entry then Rage.entry, Rage.player = nil, nil end
 		if DH.Physrep.isAttached() then DH.Physrep.detach("ragebot paused") end
@@ -3868,6 +3805,7 @@ local function step(dt)
 	local entry = Rage.pick(now)
 	DH.Fakepos.setSource("rage", function(real) return Rage.stand(real) end)
 	if not entry then
+		Rage.why = "no target"
 		Rage.stompingNow = false
 		if DH.Physrep.isAttached() then DH.Physrep.detach("no target") end
 		DH.Void.setWaiting(true)
@@ -3899,16 +3837,18 @@ local function step(dt)
 	end
 
 	if entry.ko then
+		Rage.why = opt("stomp") and "target down: stomping" or "target down"
 		stompStep(entry, now)
 		return
 	end
 	realBody(entry, now)
 	local gun = Rage.pickGun(dist)
-	if not gun then return end
-	if not equip(gun, now) then return end
-	local aim = Rage.aim(entry, gun)
-	if not aim then return end
-	local ok = Rage.canFire(entry, gun, aim, now)
+	if not gun then Rage.why = "no gun with a round or spare ammo"; return end
+	if not equip(gun, now) then Rage.why = "equipping " .. gun.Name; return end
+	local aim, aimWhy = Rage.aim(entry, gun)
+	if not aim then Rage.why = "aim: " .. tostring(aimWhy); return end
+	local ok, why = Rage.canFire(entry, gun, aim, now)
+	Rage.why = ok and "firing" or tostring(why)
 	if ok then Rage.shoot(gun, entry, aim, now) end
 	if opt("autoReload") and gun.Ammo.Value <= DH.K.get("RAGE_RELOAD_AT") then Rage.reload(gun, now) end
 end
@@ -3923,7 +3863,7 @@ function Rage.status()
 	return {
 		on = Rage.on(), paused = Rage.paused, autoPaused = Rage.autoPaused, target = Rage.player and Rage.player.Name or nil,
 		ko = entry and entry.ko or nil, fired = Rage.fired, stomps = Rage.stomps, reloads = Rage.reloads, kills = Rage.kills,
-		riding = DH.Physrep and DH.Physrep.isAttached() or false, override = Rage.override ~= nil,
+		riding = DH.Physrep and DH.Physrep.isAttached() or false, override = Rage.override ~= nil, why = Rage.why,
 	}
 end
 DH.register("ragebot", Rage)
@@ -3946,27 +3886,12 @@ local COLORS = {
 	cues = Color3.fromRGB(255, 225, 70), deadreckon = Color3.fromRGB(255, 150, 50), result = Color3.fromRGB(60, 255, 110),
 }
 
-local groundParams = RaycastParams.new()
-groundParams.FilterType = Enum.RaycastFilterType.Exclude
----The ground height under (x, z): the first surface looking down from high up, characters and the camera left out.
-local function groundAt(x, z)
-	local skip = { workspace.CurrentCamera }
-	for _, player in ipairs(S.Players:GetPlayers()) do if player.Character then skip[#skip + 1] = player.Character end end
-	local ignored = workspace:FindFirstChild("Ignored")
-	if ignored then skip[#skip + 1] = ignored end
-	groundParams.FilterDescendantsInstances = skip
-	local hit = workspace:Raycast(Vector3.new(x, 2500, z), Vector3.new(0, -3500, 0), groundParams)
-	return hit and hit.Position.Y or nil
-end
-Resolver.groundAt = groundAt
-
 local function cfg()
 	local now = os.clock()
 	if Resolver.cfg_ and now - Resolver.lastCfgAt < 1 then return Resolver.cfg_ end
 	local K = DH.K.get
 	Resolver.cfg_ = {
 		windowSeconds = K("RES_WINDOW"), maxJump = K("RES_MAX_JUMP"), maxSpeed = K("RES_MAX_SPEED"), agreeSigma = K("RES_SIGMA"), minConfidence = K("RES_MIN_CONF"),
-		groundAt = groundAt,
 	}
 	Resolver.lastCfgAt = now
 	return Resolver.cfg_

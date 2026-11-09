@@ -3,3 +3,4 @@ Build: python -I build.py (needs baseline/, lune on PATH for the compile gate). 
 pure/ = offline-tested modules, src/ = runtime, tools/ = live rig (poller, capture, replicate, lag, resolver analysis).
 Measured on Volt 1.3.21.2 with two alts: fake position replicates (0.01 studs, 40 off); lag 0.240 s = pings 0.059 + interpolation 0.180.
 Not yet measured live: resolver table, server shot rules, physrep ride, cleanup, ragebot hit rates.
+Attack test 2026-11-09 (morrowindf vs gotham77r): the fake position works live; the server accepted 1 shot (a knock-out) and none since in any mode. See results/attack_report.md. Void body swaps are clamped (no 1e29 constants, error 260); the arrival wait follows the ping.
