@@ -567,10 +567,236 @@ do
 		["monster.desync"] = false, ["monster.desyncRange"] = 40,
 		["monster.fake"] = false, ["monster.fakeWhere"] = "decoy", ["monster.fakeDistance"] = 40, ["monster.fakeNear"] = 4, ["monster.ghostHeight"] = 120, ["monster.ghostJitter"] = 10, ["monster.decoyUp"] = 0,
 		["monster.desyncTools"] = true, ["monster.desyncBox"] = true,
+		["monster.fakeOffX"] = 0, ["monster.fakeOffY"] = 0, ["monster.fakeOffZ"] = 30,
+		["monster.orbitRadius"] = 10, ["monster.orbitHeight"] = 0, ["monster.orbitSpeed"] = 6,
+		["monster.rak"] = true, ["monster.rakRate"] = 30, ["monster.rakShoot"] = true, ["monster.rakFace"] = "you", ["monster.rakRage"] = true,
+		["monster.voidStrike"] = true, ["monster.voidSpam"] = true, ["monster.voidArrive"] = 0.25, ["monster.strikeSpread"] = 12, ["monster.showLures"] = true,
 	}
 	for id, default in pairs(DEFAULTS) do Config.define(id, default) end
 
-	local root, real, put
+	-- ---- Raknet (Volt): the server is told where you are, the body stays where it is.
+	-- Measured 2026-11-09 on Volt 1.3.21.2 with two accounts (morrowindf faking, gotham77r watching):
+	--  * Da Hood sends your body as packet 0xA1: bytes 2-5 a 1/240 s stamp (older ones are dropped), 6-34 a
+	--    header that stays the same for one body, 35-36 the payload length, then the payload.
+	--  * Payload: one byte 0x60 + rotation id (0 = 6 rotation bytes follow), one byte e*8 + signs of X,Y,Z,
+	--    three 16-bit axes (value = raw / 2^(16-e), minus 2^e when negative; e <= 10 so |coords| < 1024),
+	--    then the rotation: a quaternion, 2-bit index of the largest part + three signed 15-bit parts.
+	--  * Blocking 0xA1: the other screen saw the body frozen while it walked 25 studs. Crafted packets at
+	--    real + 30: seen exactly 30 off, following it. Off: back to the real place at once.
+	-- Void (2026-11-09): nothing past |coords| 1024 is ever crafted. That format packs the axes differently, and
+	-- replaying far packets the engine had made got the account DISCONNECTED by the server (error 260, "problem
+	-- receiving data", ~8 s in). The void stays inside the decoded format instead (see the Void step below).
+	local Rak = { on = false, sent = 0, failed = 0, blocked = 0 }
+	genv.MONSTER_RAK = Rak      -- (what a test reads)
+	do
+		Rak.available = type(raknet) == "table" and type(raknet.add_send_hook) == "function" and type(raknet.send) == "function"
+		local header, lastStamp, lastClock, needHeader = nil, 0, 0, false
+		local acc, want = 0, nil
+		local function onSend(packet)
+			if packet.PacketId ~= 0xA1 then return end
+			local s = packet.AsString
+			if #s < 36 then return end
+			local stamp = string.unpack("<I4", s, 2)
+			if stamp > lastStamp then lastStamp, lastClock = stamp, os.clock() end
+			header, needHeader = string.sub(s, 1, 34), false
+			if Rak.on then
+				packet:Block()
+				Rak.blocked += 1
+			end
+		end
+		local function hook(packet) pcall(onSend, packet) end
+		if Rak.available then
+			if genv.MONSTER_RAK_HOOK then pcall(raknet.remove_send_hook, genv.MONSTER_RAK_HOOK) end
+			Rak.available = pcall(raknet.add_send_hook, hook)
+			if Rak.available then genv.MONSTER_RAK_HOOK = hook end
+		end
+
+		-- the body's packets carry its own header: a new body needs a new one before anything is sent
+		local respawned = LP.CharacterAdded:Connect(function() header = nil end)
+
+		local function axes(position)
+			local big = math.max(math.abs(position.X), math.abs(position.Y), math.abs(position.Z))
+			local e = 1
+			while 2 ^ e <= big do e += 1 end
+			if e > 10 then return nil end
+			local scale, signs, out = 2 ^ (16 - e), 0, {}
+			for i, value in ipairs({ position.X, position.Y, position.Z }) do
+				local negative = value < 0
+				if negative then signs += 2 ^ (3 - i) end
+				out[i] = string.pack("<I2", math.clamp(math.floor((value + (negative and 2 ^ e or 0)) * scale + 0.5), 0, 65535))
+			end
+			return string.char(e * 8 + signs) .. table.concat(out)
+		end
+		-- upright, turned by yaw (measured: yaw 30/45/60/-45 = index 3, sin in the first part; 135 = index 1, cos in the second)
+		local QUARTER = 32767 / math.sqrt(2)
+		local function rotation(yaw)
+			local s, c = math.sin(yaw / 2), math.cos(yaw / 2)
+			local index, parts
+			if math.abs(c) >= math.abs(s) then
+				if c < 0 then s = -s end
+				index, parts = 3, { s, 0, 0 }
+			else
+				if s < 0 then c = -c end
+				index, parts = 1, { 0, c, 0 }
+			end
+			local value = index * 2 ^ 46
+			for i, part in ipairs(parts) do
+				local raw = math.clamp(math.floor(part * QUARTER + 0.5), -16384, 16383) % 32768
+				value += raw * 2 ^ (46 - 15 * i)
+			end
+			return string.pack("<I4", value % 2 ^ 32) .. string.pack("<I2", math.floor(value / 2 ^ 32))
+		end
+
+		---Send one body packet: the live header, a new stamp, and `framed` (length + payload).
+		---@param framed string
+		---@return boolean
+		local function sendFramed(framed)
+			if not header then
+				Rak.failed += 1
+				return false
+			end
+			local stamp = math.max(lastStamp + 1, lastStamp + math.floor((os.clock() - lastClock) * 240))
+			local packet = string.sub(header, 1, 1) .. string.pack("<I4", stamp) .. string.sub(header, 6, 34) .. framed
+			if not pcall(raknet.send, buffer.fromstring(packet)) then
+				Rak.failed += 1
+				return false
+			end
+			lastStamp, lastClock = stamp, os.clock()
+			Rak.sent += 1
+			return true
+		end
+
+		---Tell the server the body is at cframe now (needs one real packet of this body seen first).
+		---@param cframe CFrame
+		---@return boolean
+		function Rak.send(cframe)
+			local body = axes(cframe.Position)
+			if not body then
+				Rak.failed += 1
+				return false
+			end
+			local look = cframe.LookVector
+			local payload = string.char(0x60) .. body .. rotation(math.atan2(-look.X, -look.Z))
+			return sendFramed(string.pack("<I2", #payload) .. payload)
+		end
+
+		---Hold the server body at cframe, re-sent at the chosen rate (the first right away).
+		---@param cframe CFrame
+		---@param root BasePart
+		---@param dt number
+		---@param everyStep boolean? send on every call, not at the chosen rate
+		function Rak.hold(cframe, root, dt, everyStep)
+			local first = not Rak.on
+			Rak.on, want = true, cframe
+			if not header and root then
+				-- (a body standing still sends nothing: a 0.02-stud shift makes one, which is blocked and read)
+				needHeader = true
+				root.CFrame = root.CFrame + Vector3.new(0.02, 0, 0)
+				return
+			end
+			acc += dt
+			if first or everyStep or acc >= 1 / math.max(Config.get("monster.rakRate"), 5) then
+				acc = 0
+				Rak.send(want)
+			end
+		end
+
+		---Let go: the server is given the real place once, then the body's own packets flow again.
+		---@param cframe CFrame?
+		function Rak.release(cframe)
+			if not Rak.on then return end
+			if cframe then Rak.send(cframe) end
+			Rak.on, want, acc = false, nil, 0
+		end
+
+		function Rak.stop()
+			Rak.on = false
+			respawned:Disconnect()
+			if genv.MONSTER_RAK_HOOK then pcall(raknet.remove_send_hook, genv.MONSTER_RAK_HOOK) end
+			genv.MONSTER_RAK_HOOK = nil
+		end
+		Rak.needsHeader = function() return needHeader end
+	end
+	local function rakOn() return Rak.available and Config.get("monster.rak") == true end
+	local function voiding() return Config.get("monster.fake") == true and Config.get("monster.fakeWhere") == "void" end
+
+	-- the strike: while the body is in the void, a shot (yours or the ragebot's) is held until the server has the body
+	-- at the strike place, and the body stays there `hold` seconds after the last one, then goes back.
+	-- Measured 2026-11-09 vs BasedHub: strikes always at the real place lost 1-2 (its ambush learns where you show up),
+	-- so each strike now shows you at a NEW place near you, free of walls and with a clear line to where the shot goes,
+	-- and the shot leaves from there.
+	local strike = genv.MONSTER_STRIKE
+	-- (a hook cannot be taken off: an older build's hook keeps its own table, which stays off, so it only passes through)
+	if strike and strike.version ~= 2 then
+		strike.on = false
+		strike = nil
+	end
+	if not strike then
+		strike = { version = 2, on = false, since = 0, untilT = 0, arrive = 0.12, hold = 0.4, delayed = 0, direct = 0 }
+		genv.MONSTER_STRIKE = strike
+	end
+	strike.on, strike.untilT, strike.spot, strike.shift = false, 0, nil, nil
+	local strikeSight = RaycastParams.new()
+	strikeSight.FilterType = Enum.RaycastFilterType.Exclude
+	local strikeRoom = OverlapParams.new()
+	strikeRoom.FilterType = Enum.RaycastFilterType.Exclude
+	---A place within `strike.spread` of `base` with room to stand and a clear line to `aim` (base if none is found).
+	---@param base Vector3
+	---@param aim Vector3?
+	---@param hitPart Instance?
+	---@return Vector3
+	function strike.pick(base, aim, hitPart)
+		local spread = strike.spread or 0
+		if spread <= 0 then return base end
+		local skip = { LP.Character, workspace.CurrentCamera }
+		local model = typeof(hitPart) == "Instance" and hitPart:FindFirstAncestorOfClass("Model")
+		if model then skip[#skip + 1] = model end
+		strikeSight.FilterDescendantsInstances, strikeRoom.FilterDescendantsInstances = skip, skip
+		for _ = 1, 14 do
+			local turn, far = math.random() * math.pi * 2, spread * (0.4 + 0.6 * math.random())
+			local spot = base + Vector3.new(math.cos(turn) * far, math.random() * 3, math.sin(turn) * far)
+			local free = #workspace:GetPartBoundsInRadius(spot, 2, strikeRoom) == 0
+			if free and (typeof(aim) ~= "Vector3" or not workspace:Raycast(spot, aim - spot, strikeSight)) then return spot end
+		end
+		return base
+	end
+	if not strike.hooked and hookmetamethod and getnamecallmethod then
+		strike.hooked = pcall(function()
+			local old
+			old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+				if strike.on and getnamecallmethod() == "FireServer" and typeof(self) == "Instance" and self.Name == "MainEvent" and (...) == "ShootGun" then
+					local now = os.clock()
+					local args, count = { ... }, select("#", ...)
+					if now > strike.untilT then
+						-- a new strike: a new place (only where the server can be told it, over raknet)
+						strike.since = now
+						local base = strike.real
+						local spot = base and strike.movable and strike.pick(base, args[4], args[5]) or base
+						strike.spot, strike.shift = spot, spot and base and spot - base or nil
+					end
+					strike.untilT = now + strike.hold
+					if strike.shift and typeof(args[3]) == "Vector3" then args[3] = args[3] + strike.shift end
+					local wait = strike.since + strike.arrive - now
+					if wait > 0 then
+						strike.delayed += 1
+						task.spawn(function()
+							task.wait(wait)
+							-- (a dot call: no hook sees it again)
+							pcall(self.FireServer, self, table.unpack(args, 1, count))
+						end)
+						return
+					end
+					strike.direct += 1
+					return old(self, table.unpack(args, 1, count))
+				end
+				return old(self, ...)
+			end))
+		end)
+	end
+	local pingItem = game:GetService("Stats").Network.ServerStatsItem:FindFirstChild("Data Ping")
+
+	local root, real, put, frozenAt
+	local putVoid, voidSpot, voidRandom = false, nil, Random.new()
 	local nudge, sendUntil = 1, 0
 	local connections = {}
 	-- On target: who, since when the body has been beside them, and the gun's clock
@@ -604,7 +830,9 @@ do
 	end
 
 	local function wanted() return Config.get("monster.desync") == true or Config.get("monster.fake") == true end
-	local function hunting() return B.DaHood ~= nil and B.DaHood.on == true end
+	-- (the ragebot moves the body itself; over raknet that is fine, the server only ever gets the fake)
+	local function hunting() return B.DaHood ~= nil and B.DaHood.on == true and not ((rakOn() or voiding()) and Config.get("monster.rakRage")) end
+	local function shootingFromFake() return rakOn() and Config.get("monster.rakShoot") == true end
 	local function onTarget() return Config.get("monster.fake") == true and Config.get("monster.fakeWhere") == "target" end
 	local function ghosting() return Config.get("monster.fake") == true and Config.get("monster.fakeWhere") == "ghost" end
 	-- Decoy (asked 2026-11-07 after the clip: the other screen sees your character standing still where you
@@ -668,10 +896,24 @@ do
 		local knocked = effects and effects:FindFirstChild("K.O")
 		return humanoid ~= nil and humanoid.Health > 0 and not (knocked and knocked.Value) and not character:FindFirstChildOfClass("ForceField")
 	end
+	-- the hub's own moments that need the server to see the real body. MEASURED 2026-11-09: with the fake on, every
+	-- shop click failed (the server checks the body is at the pad), the account lost its guns to stomps and was left
+	-- with none ("buying: armour" for the whole duel, 0 shots fired). So the fake steps aside while the hub buys,
+	-- stomps or brings, and, with Show lures on, while the ragebot lures or baits (that is how a void-camper is
+	-- drawn out to be shot).
+	local function hubNeedsReal()
+		local DH = B.DaHood
+		if not DH then return false end
+		if DH.errand == true then return true end
+		if not DH.on then return false end
+		local status = type(DH.status) == "string" and DH.status or ""
+		if string.find(status, "^stomping") or string.find(status, "^bringing") or string.find(status, "^buying") or string.find(status, "^waiting at the pad") then return true end
+		return Config.get("monster.showLures") == true and (string.find(status, "^luring") ~= nil or string.find(status, "^baiting") ~= nil)
+	end
 	local function active(character)
-		if not wanted() or hunting() then return false end
+		if not wanted() or hunting() or hubNeedsReal() then return false end
 		-- (On target shoots for you, so a gun in hand is what it wants)
-		if Config.get("monster.desyncTools") and not onTarget() and not ghosting() and not decoying() and character:FindFirstChildOfClass("Tool") then return false end
+		if Config.get("monster.desyncTools") and not onTarget() and not ghosting() and not decoying() and not shootingFromFake() and not voiding() and character:FindFirstChildOfClass("Tool") then return false end
 		local humanoid = character:FindFirstChildOfClass("Humanoid")
 		local effects = character:FindFirstChild("BodyEffects")
 		local knocked = effects and effects:FindFirstChild("K.O")
@@ -855,7 +1097,27 @@ do
 			local where = Config.get("monster.fakeWhere")
 			local flat = Vector3.new(cframe.LookVector.X, 0, cframe.LookVector.Z)
 			flat = flat.Magnitude > 0.01 and flat.Unit or Vector3.new(0, 0, -1)
-			if where == "above" then centre = cframe + Vector3.new(0, far, 0)
+			if where ~= "freeze" then frozenAt = nil end
+			if where == "offset" then
+				-- right, up, back from where you face
+				local turned = CFrame.lookAt(cframe.Position, cframe.Position + flat)
+				centre = turned * CFrame.new(Config.get("monster.fakeOffX"), Config.get("monster.fakeOffY"), Config.get("monster.fakeOffZ"))
+			elseif where == "orbit" then
+				-- round the target (round you with nobody to pick), a full turn every 2pi/speed seconds
+				local target = pick(cframe.Position)
+				local theirRoot = target and target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+				-- (a target in the void is past what a packet can carry, |coords| < 1024: then round you)
+				local there = theirRoot and theirRoot.Position
+				local reachable = there and math.max(math.abs(there.X), math.abs(there.Y), math.abs(there.Z)) < 1000
+				local middle = reachable and there or cframe.Position
+				local turn, radius = os.clock() * Config.get("monster.orbitSpeed"), Config.get("monster.orbitRadius")
+				local spot = middle + Vector3.new(math.cos(turn) * radius, Config.get("monster.orbitHeight"), math.sin(turn) * radius)
+				centre = CFrame.lookAt(spot, Vector3.new(middle.X, spot.Y, middle.Z))
+			elseif where == "freeze" then
+				-- left where it was switched on, as a body standing still
+				frozenAt = frozenAt or cframe
+				centre = frozenAt
+			elseif where == "above" then centre = cframe + Vector3.new(0, far, 0)
 			elseif where == "behind" then centre = cframe - flat * far
 			elseif where == "side" then centre = cframe + Vector3.new(-flat.Z, 0, flat.X) * far
 			else centre = cframe - Vector3.new(0, far, 0) end
@@ -870,6 +1132,12 @@ do
 	-- put back, keeping whatever small change was made while it was away (a tool taken out shifts it a
 	-- little, the camera turns it); a body moved further than that was moved on purpose, and stays
 	local function putBack()
+		-- (from the void always straight back: ~1e9 out a position is only good to ~100 studs)
+		if put and putVoid then
+			if root and root.Parent then root.CFrame = real end
+			put, putVoid = nil, false
+			return
+		end
 		if put and root and root.Parent and (root.Position - put.Position).Magnitude < 2 then
 			root.CFrame = real * put:ToObjectSpace(root.CFrame)
 		end
@@ -884,32 +1152,122 @@ do
 		end
 	end)
 	connections[#connections + 1] = RunService.PreRender:Connect(putBack)
-	connections[#connections + 1] = RunService.PostSimulation:Connect(function()
+	-- which way the body they see faces: as you do (or as the mode set it), at the target, or spinning
+	local function faced(fake, cframe)
+		local face = Config.get("monster.rakFace")
+		if face == "target" then
+			local target = hunt.player or pick(cframe.Position)
+			local theirRoot = target and target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+			if theirRoot then
+				local at = fake.Position
+				local there = Vector3.new(theirRoot.Position.X, at.Y, theirRoot.Position.Z)
+				if (there - at).Magnitude > 0.1 then return CFrame.lookAt(at, there) end
+			end
+		elseif face == "spin" then
+			return CFrame.new(fake.Position) * CFrame.Angles(0, (os.clock() * 25) % (math.pi * 2), 0)
+		end
+		return fake
+	end
+
+	connections[#connections + 1] = RunService.PostSimulation:Connect(function(dt)
 		putBack()
 		local character = LP.Character
 		root = character and character:FindFirstChild("HumanoidRootPart")
-		if wanted() and not hunting() then sendUntil = os.clock() + 0.5 end
+		local packets = rakOn()
+		if wanted() and not hunting() and not packets then sendUntil = os.clock() + 0.5 end
 		if not (root and active(character)) then
+			strike.on = false
+			Rak.release(root and root.CFrame)
 			hideBox()
-			hunt.player = nil
+			hunt.player, frozenAt = nil, nil
 			ghost.shift, ghost.real, ghost.home, ghost.decoy = nil, nil, nil, false
 			return
 		end
 		real = root.CFrame
-		put = fakeOf(real)
-		if not put then ghost.shift = nil; return hideBox() end
-		if ghosting() or decoying() then ghost.shift, ghost.real = (ghost.centre or put.Position) - real.Position, real.Position else ghost.shift = nil end
-		root.CFrame = put
+		-- Void: after each physics step the body is put far out (a new spot every step unless Spam is off) and put
+		-- back before the next step and before the frame is drawn, so the engine itself sends the void and every
+		-- packet is one it made (crafted void packets got the account disconnected). Any executor can run it.
+		-- A shot brings the body back here for a moment (the strike) and is held until the server has it here.
+		strike.on = false
+		if voiding() then
+			ghost.shift = nil
+			hideBox()
+			strike.on = Config.get("monster.voidStrike") == true
+			strike.real, strike.movable, strike.spread = real.Position, packets, Config.get("monster.strikeSpread")
+			local ping = pingItem and pingItem:GetValue() / 1000 or 0.1
+			if packets then
+				-- Sky void (raknet): every packet a new random spot in a 2000 x 2000 box 600-1000 up, all inside the
+				-- packet format that is fully decoded (thousands sent, no disconnect). Nobody can be where the next
+				-- one lands. A strike sends its place every step from its first (a shot 0.1 s after was taken), and
+				-- stays only a short moment after the last shot.
+				strike.arrive = math.clamp(ping + 0.06, 0.08, 0.4)
+				strike.hold = strike.arrive + 0.15
+				if os.clock() < strike.untilT then
+					local at = strike.spot or real.Position
+					Rak.hold(real.Rotation + at, root, dt, true)
+				else
+					local spot = Vector3.new(voidRandom:NextNumber(-1000, 1000), voidRandom:NextNumber(600, 1000), voidRandom:NextNumber(-1000, 1000))
+					if not Config.get("monster.voidSpam") then voidSpot = voidSpot or spot; spot = voidSpot end
+					Rak.hold(CFrame.new(spot), root, dt)
+				end
+				return
+			end
+			-- Far void (no raknet): a body swap far out. MEASURED: the engine sends those jumps as teleports (no
+			-- 0xA1 at all), and the server then refused every shot for at least 0.8 s after coming back (0 of 12), so
+			-- without raknet the void only hides you; a shot still brings you back.
+			Rak.release(nil)
+			strike.arrive = math.clamp(ping + Config.get("monster.voidArrive"), 0.15, 0.8)
+			strike.hold = strike.arrive + 0.3
+			if os.clock() < strike.untilT then
+				-- (a body left still sends nothing: a 0.01-stud shift each step makes the engine send the real place)
+				nudge = -nudge
+				root.CFrame = root.CFrame + Vector3.new(0.01 * nudge, 0, 0)
+				return
+			end
+			-- (and the same shift keeps the swapped body sending at all: a still one sent nothing for 90 s)
+			nudge = -nudge
+			real = real + Vector3.new(0.01 * nudge, 0, 0)
+			if Config.get("monster.voidSpam") or not voidSpot then
+				voidSpot = Vector3.new(voidRandom:NextNumber(-1.5e9, 1.5e9), voidRandom:NextNumber(4e8, 2e9), voidRandom:NextNumber(-1.5e9, 1.5e9))
+			end
+			put, putVoid = CFrame.new(voidSpot), true
+			root.CFrame = put
+			return
+		end
+		voidSpot = nil
+		local fake = fakeOf(real)
+		if not fake then
+			ghost.shift = nil
+			Rak.release(real)
+			return hideBox()
+		end
+		fake = faced(fake, real)
+		if ghosting() or decoying() then
+			ghost.shift, ghost.real = (ghost.centre or fake.Position) - real.Position, real.Position
+		elseif packets and (Config.get("monster.rakShoot") or onTarget()) then
+			-- your shots leave from where the server has you (it refuses them from anywhere else)
+			ghost.shift, ghost.real = fake.Position - real.Position, real.Position
+		else
+			ghost.shift = nil
+		end
+		if packets then
+			-- the body stays here; only the server is told the fake
+			Rak.hold(fake, root, dt)
+		else
+			Rak.release(nil)
+			put = fake
+			root.CFrame = put
+		end
 		-- On target: a jump to a new place is waited out before firing, then every shot goes from here
 		if onTarget() and hunt.player then
 			local now = os.clock()
-			if hunt.last and (put.Position - hunt.last).Magnitude > 12 then hunt.since = now end
-			hunt.last = put.Position
+			if hunt.last and (fake.Position - hunt.last).Magnitude > 12 then hunt.since = now end
+			hunt.last = fake.Position
 			local gun = gunIn(character)
 			local part = hunt.player.Character and (hunt.player.Character:FindFirstChild("UpperTorso") or hunt.player.Character:FindFirstChild("HumanoidRootPart"))
 			if gun and part and now - hunt.since >= 0.25 then fire(gun, part) end
 		end
-		showBox(put)
+		showBox(fake)
 	end)
 
 	-- its own tab, beside Da Hood's (another game has no Ragebot tab, and gets none of this)
@@ -925,24 +1283,50 @@ do
 		Window.page({ id = "dahood.monster", title = "Desync", icon = "ghost", group = rage.group, order = last + 1, eyebrow = rage.eyebrow, build = function(page)
 			local jump = page:section({ title = "Desync", icon = "shuffle", desc = "Others see you somewhere new every step." })
 			jump:toggle({ id = "monster.desync", label = "Desync", desc = "You jump around for them. Their shots miss.", default = false })
-			jump:slider({ id = "monster.desyncRange", label = "How far", desc = "How far from you they see you.", min = 10, max = 150, step = 1, default = 40, suffix = " st" })
+			jump:slider({ id = "monster.desyncRange", label = "How far", desc = "How far from you they see you. 150+ stopped BasedHub firing.", min = 10, max = 400, step = 5, default = 40, suffix = " st" })
 			local fake = page:section({ title = "Fake position", icon = "map-pin", desc = "Others see you in one other place." })
 			fake:toggle({ id = "monster.fake", label = "Fake position", desc = "They see you there, you play here.", default = false })
 			fake:dropdown({ id = "monster.fakeWhere", label = "Where", desc = "Decoy: they see you stand still, you roam.",
-				options = { { "decoy", "Decoy" }, { "ghost", "Ghost" }, { "target", "On target" }, { "below", "Below" }, { "behind", "Behind" }, { "side", "Side" }, { "above", "Above" } }, default = "decoy" })
+				options = { { "decoy", "Decoy" }, { "ghost", "Ghost" }, { "target", "On target" }, { "void", "Void" }, { "orbit", "Orbit target" }, { "offset", "Offset" }, { "freeze", "Freeze" }, { "below", "Below" }, { "behind", "Behind" }, { "side", "Side" }, { "above", "Above" } }, default = "decoy" })
+			fake:slider({ id = "monster.fakeOffX", label = "Offset X", desc = "Offset: right (+) or left (-).", min = -150, max = 150, step = 1, default = 0, suffix = " st" })
+			fake:slider({ id = "monster.fakeOffY", label = "Offset Y", desc = "Offset: up (+) or down (-).", min = -100, max = 300, step = 1, default = 0, suffix = " st" })
+			fake:slider({ id = "monster.fakeOffZ", label = "Offset Z", desc = "Offset: behind (+) or in front (-).", min = -150, max = 150, step = 1, default = 30, suffix = " st" })
+			fake:slider({ id = "monster.orbitRadius", label = "Orbit radius", desc = "Orbit: how far round the target.", min = 2, max = 60, step = 1, default = 10, suffix = " st" })
+			fake:slider({ id = "monster.orbitHeight", label = "Orbit height", desc = "Orbit: above (+) or below (-) them.", min = -10, max = 60, step = 1, default = 0, suffix = " st" })
+			fake:slider({ id = "monster.orbitSpeed", label = "Orbit speed", desc = "Orbit: how fast it goes round.", min = 1, max = 20, step = 1, default = 6 })
 			fake:slider({ id = "monster.decoyUp", label = "Decoy up", desc = "Decoy: raise it, out of reach (0 = where you stand).", min = 0, max = 250, step = 5, default = 0, suffix = " st" })
 			fake:slider({ id = "monster.ghostJitter", label = "Ghost dodge", desc = "Ghost: how far it jumps about. 0 is off.", min = 0, max = 14, step = 1, default = 10, suffix = " st" })
 			fake:slider({ id = "monster.ghostHeight", label = "Ghost height", desc = "Ghost: how high up they see you.", min = 30, max = 250, step = 5, default = 120, suffix = " st" })
 			fake:slider({ id = "monster.fakeNear", label = "From target", desc = "How close to them, on target.", min = 2, max = 12, step = 1, default = 4, suffix = " st" })
 			fake:slider({ id = "monster.fakeDistance", label = "How far", desc = "How far from you, the others.", min = 5, max = 200, step = 1, default = 40, suffix = " st" })
-			local both = page:section({ title = "Both", icon = "settings-2", desc = "Both stop while the ragebot hunts." })
+			local both = page:section({ title = "Both", icon = "settings-2", desc = "Both stop while the ragebot hunts (not over raknet)." })
 			both:toggle({ id = "monster.desyncTools", label = "Off while holding", desc = "A gun out brings you back (not on target).", default = true })
 			both:toggle({ id = "monster.desyncBox", label = "Show where they see you", desc = "A red body at your fake place.", default = true })
+			if Rak.available then
+				local rak = page:section({ title = "Raknet", icon = "radio", desc = "Volt: only the server is told the fake. You never move." })
+				rak:toggle({ id = "monster.rak", label = "Use raknet", desc = "Off: the old body swap.", default = true })
+				rak:toggle({ id = "monster.rakShoot", label = "Shoot from fake", desc = "Your shots leave from where they see you.", default = true })
+				rak:toggle({ id = "monster.rakRage", label = "Keep on with Ragebot", desc = "The ragebot fights, they see the fake.", default = true })
+				rak:dropdown({ id = "monster.rakFace", label = "Face", desc = "Which way the fake looks.",
+					options = { { "you", "As you" }, { "target", "The target" }, { "spin", "Spin" } }, default = "you" })
+				rak:slider({ id = "monster.rakRate", label = "Send rate", desc = "Fake updates a second.", min = 10, max = 60, step = 1, default = 30, suffix = "/s" })
+			end
+			local void = page:section({ title = "Void", icon = "orbit", desc = "Where = Void: they see you jump around the sky." })
+			void:toggle({ id = "monster.voidStrike", label = "Strike to shoot", desc = "A shot brings you back for a moment.", default = true })
+			void:toggle({ id = "monster.voidSpam", label = "New spot every step", desc = "Nobody can follow you in.", default = true })
+			void:toggle({ id = "monster.showLures", label = "Show lures", desc = "The ragebot's lures are seen, so hiders come out.", default = true })
+			void:slider({ id = "monster.strikeSpread", label = "Strike spread", desc = "Each shot shows you somewhere new near you. 0 = where you stand.", min = 0, max = 25, step = 1, default = 12, suffix = " st" })
 		end })
 	end)
 
 	function Desync.stop()
 		for _, connection in ipairs(connections) do connection:Disconnect() end
+		local character = LP.Character
+		local body = character and character:FindFirstChild("HumanoidRootPart")
+		strike.on = false
+		Rak.release(body and body.CFrame)
+		Rak.stop()
+		ghost.shift = nil
 		putBack()
 		if holder then pcall(function() holder:Destroy() end) end
 		if Window.pages and Window.pages["dahood.monster"] then Window.removePage("dahood.monster") end
