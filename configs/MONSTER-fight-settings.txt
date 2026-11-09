@@ -1,0 +1,331 @@
+MONSTER FIGHT SETTINGS - every setting on the fighting pages, with the pick and why
+(Ragebot, Resolver, Maneuvers, Rage, Defense, Desync). Matching config: configs/MONSTER-fight.json
+Tags: [D] duel vs BasedHub  [S] measured server rule  [C] note in the code  [T] this session  [I] inference  [-] no data.
+Only BasedHub was ever the opponent, and no shot was accepted in the latest tests, so every pick is unverified against other scripts.
+
+Built from what is on this machine, so every pick says where it comes from. Read the tags:
+- [D] a live duel against BasedHub (morrowindf vs gotham77r), scored kills minus deaths, one 120 s duel per batch (`_bsweep_m.jsonl`). One duel is noisy, and the scores top out at 11-12 kills, so "kept" means "not worse", not "proven best".
+- [S] a server rule measured on the two-alt rig (in the ragebot header and the codec notes): shot origin within 17 studs of the server body; hit point within 22 studs of the part; a hop of more than ~10 studs needs 0.10-0.23 s before shots count; stomp counts 1.5-9.5 studs up, a missed stomp blocks the next for 0.55 s, nothing counts during a reload; lag 0.24 s; a shot closer than 0.14 s to the last one is lost; packets can only carry coordinates under 1024.
+- [C] a measurement written into the setting's own description in the code.
+- [T] from the tests this session. [I] my inference. [-] no data: keep your tuned value.
+
+READ THIS FIRST
+1. The only opponent ever measured is BasedHub. Nothing here was tested against Unnamed Enhancements, Neverlose or any other script. Against a different script the [D] picks are a starting point, not a result.
+2. The attack engine with results is the one on the Ragebot / Maneuvers tabs (the BasedHub-derived ragebot with the sky-void strike): 22 hits and 0 taken in a 95 s void round earlier today, and 11-12 kills with 0 deaths in the sweep (Nov 3-4). This session it landed nothing either (run L1 against gotham77r: 0 hits), and MONSTER's own Rage tab landed 1 of about 320 salvos. So something blocked shots after the first knock-out: possibly a server-side flag on morrowindf, not the settings. Treat every pick below as untested until a shot is accepted again.
+3. The resolver does not beat the plain replicated position in the recorded runs (static, follow, orbit, void: no gain; only jitter improved a little). Do not expect it to find a hidden body.
+4. Error 260 hazard. morrowindf's Roblox log shows the server kicking it with reason 260 seven times today. The code notes tie 260 to far (past 1024) packets, and your saved Void far / high / jitter are 1e9 / 1e6 / 1e7 studs. After my last fake-position test I found BasedHub's Ragebot on, the real body thousands of studs out, and a steady stream of 52-byte body packets the codec cannot read. That fits the far-packet story but is not confirmed as the cause. Safest combination: Fake position with Where = Void and Void position = Sky, Wait in = Sky (not Void), and BasedHub's Ragebot off while you test it.
+
+RAGEBOT TAB
+
+-- Ragebot
+  Ragebot: on  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Mouse reach (20..300): 90  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+
+-- Targeting
+  Priority: closest  | [D] R4 kept (10-1 duel, with stance hold / stick off). Threat-first only when several people hunt you.
+  Threat weight (0..10): 2  | [D] R4. Only read when Priority = Smart.
+  Spread weight (0..10): 1  | [D] R4. Only read when Priority = Smart.
+  Stick to target: off  | [D] R4 kept with it off. Turn on in crowds so it does not flip targets.
+  Salvo: off  | [D] R5 kept (12-0). It only matters with 2+ targets, so 1v1 it changes nothing.
+  Salvo wait (0..SALVO_WAIT): 0.7  | [D] R5.
+  Pipeline: off  | [D] R5 kept (12-0). Only matters with 2+ targets.
+  Walls: off  | [D] R5 kept (12-0).
+
+-- Guns
+  Guns: [Double-Barrel SG], [Rifle]  | [D] R6: adding [Drum-Shotgun] together with fire=all, torso, smart reload off, one-tap off, safe armor on went 1-6. Do not undo any of those.
+  Smart reload: on  | [D] R6 (turning it off was part of the 1-6 batch).
+  Whole-turn taps: on  | [D] R6 (turning it off was part of the 1-6 batch).
+  Safe armor: off  | [D] R6 (turning it on was part of the 1-6 batch).
+
+-- Prediction
+  Lead time (0..1): 0.24  | [S] measured lag = ping 0.059 + interpolation 0.180 = 0.24 s. [D] R7 custom 0.2 / 0.15 / 2.5 with learn and snipe off = 0 kills.
+  Lead base (0..0.5): 0.1  | [D] R7 (see Lead time).
+  Ping multiplier (0..8): 2  | [D] R7 (see Lead time).
+  Learn: on  | [D] R7 (turning it off was part of the 0-kill batch).
+  Sky sniper: on  | [D] R7 (turning it off was part of the 0-kill batch).
+
+-- Stomp
+  Stomp: on  | [S] a stomp counts from 1.5 to 9.5 studs over a knocked body.
+  Stomp height (STOMP_LOW..STOMP_UP): 3.5  | [S] inside the 1.5-9.5 window. [D] R8 (5 studs, retry 0.8, forceHit off) = 1 kill.
+  Stomp retry (STOMP_MISS..2): 0.55  | [S] a missed stomp blocks the next for 0.55 s; slower only wastes time. [D] R8.
+  Cross fire: off  | [D] R5 kept (12-0). 2+ targets only.
+
+-- Timing
+  Arrive delay (ARRIVE..1): 0.15  | [S] a hop of more than ~10 studs needs 0.10-0.23 s before shots count, so your saved 0.05 loses shots. [D] R3 kept at 0.15.
+  Bait: off  | [D] R2 kept off (11-0).
+  Flak: on  | [D] R9: flak + ambush + pounce all off = 0 kills.
+  Open flak: off  | [D] R2 kept off (safer against many, per its own description).
+  Lure: off  | [D] R1: turning lure + ring lure off took the duel from 1-7 (baseline) to 11-0. The biggest single change in the data. A bot that learns where you show up counters lures.
+  Ring lure: off  | [D] R1 (see Lure).
+  Ambush: on  | [D] R9.
+  Pounce: on  | [D] R9.
+  Press: off  | [D] R2 kept off.
+  Armor pad trap: off  | [D] R2 kept off.
+  Seen time (0..0.5): 0.1  | [D] R3 kept.
+  Shield lead (0..1): 0.3  | [D] R3 kept.
+  Rate margin (RATE_MARGIN..0.2): 0.015  | [D] R10: 0.03 with switch gap 0.2 = 8 kills (worse).
+  Switch gap (SWITCH_GAP..0.6): 0.14  | [S] closer than 0.14 s and one shot is lost. [D] R10.
+
+MANEUVERS TAB
+
+-- Position
+  Hover: adaptive  | [-] your tuned value; no duel batch covers Maneuvers.
+  Frenzy: on  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Never twice: on  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Noclip: on  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Bunker: on  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Expose max (0..1): 0  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Radius (3..HOVER_MAX): 59  | [-] kept inside your guns reach (shotgun 120, rifle 250 studs).
+  Jitter: on  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Motion: jitter  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Speed (0.5..240): 6  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Size (0.5..WOBBLE): 4  | [C] more than 7 studs and shots stop counting.
+  Spin: on  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Facing: random  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Yaw speed (0..60): 3  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Yaw offset (-180..180): 0  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+
+-- Strafe
+  Height (0..250): 20  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Speed (0.1..60): 60  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Top speed (60..2000): 2000  | [C] over 560 studs/s the body hops, and the server still counts it.
+  Speed per path: off  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  None (0.1..10): 1  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Random (0..1): 0.75  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Wave (0..80): 29  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Cycle: off  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Every (0.2..30): 3  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Kinds: { "swarm", "orbit", "above" }  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+
+-- Wait
+  Wait in: sky  | [I] Void is what you tuned; Sky is the only wait that never needs a coordinate past 1024, so use it while the raknet fake position is on (260 caution above).
+  Cloud size (40..5000): 1010  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Cyclone speed (0.2..30): 5  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Sky size (30..160): 95  | [C] over 105 the bots stop coming.
+  Sky height (60..400): 300  | [C] under 500 studs it stays on the map.
+  Sky hold (0.04..0.5): 0.2  | [C] shorter than this and other screens skip some places.
+  Sky drift (0..200): 0  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+
+-- Swarm speed
+  Swarm hold (0.04..0.5): 0.12  | [C] under 0.12 s the server may miss a place. Your saved 0.08 is under it: raise it.
+  Swarm shake (0..6): 6  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+
+-- Void
+  Void: off  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Void roam: on  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Void far (5000..VOID_MAX): 1000000000  | HAZARD: a billion-stud body swap is what the old code notes tie to disconnects (error 260) once raknet fake position is also on. See the 260 section.
+  Void jitter (500..10000000): 10000000  | HAZARD: same as Void far.
+  Void high (VOID_FLOOR..1000000): 1000000  | HAZARD: same as Void far.
+
+-- Ghost
+  Ghost: on  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Walk like you: on  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Speed (16..400): 38  | [S] the game speed lock is about 40 studs/s; the code caps the real body at 38. Your 41 is just over it.
+  Ghost fly: off  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  See-through (0..95): 0  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+
+-- Void spam
+  Void spam: off  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Spam at (0.02..3): 1  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+  Spam void (0.02..3): 0.6  | [-] your tuned value (vs-BASED config); no duel batch covers it.
+
+RESOLVER TAB (THE 67 NUMBERS IT READS AND SHOOTS BY)
+Only two groups of these were ever changed in a winning duel: core spread (K2) and pounce (K9). Everything else was tried and came out the same or worse, and the Lure / Ring / Press numbers do nothing while those tactics are off. Pick = the vs-BASED value; a 0.2 s ring hold and 34-stud claim spacing etc. stay at the measured numbers.
+
+-- core
+  Server lag guess: 0.05  | [S] real lag measured 0.24 s here (ping 0.059 + interpolation 0.18).
+  Lag ceiling: 0.1  | [D] K1 tried other values: not better (scores 8-11). Keep the measured number.
+  Retry gap: 0.04  | [D] K1 tried other values: not better (scores 8-11). Keep the measured number.
+  Tries: 14  | [D] K1 tried other values: not better (scores 8-11). Keep the measured number.
+  Origin reach: 15  | [S] the server wants the shot origin within 17 studs of where it has the body; 15 leaves room.
+  Hit slack: 20  | [S] the claimed hit must be within 22 studs of the part; 20 leaves room.
+  Origin spread: 40  | [D] K2 kept (12-0 / 12-0).
+  Claim spread: 55  | [D] K2 kept (12-0 / 12-0).
+  Claims a shot: 12  | [D] K2 kept (12-0 / 12-0).
+  Path read: 0.9  | [D] K2 kept (12-0 / 12-0).
+  Ride speed: 200  | [D] K2 kept (12-0 / 12-0).
+  Follower range: 220  | [D] K2 kept (12-0 / 12-0).
+
+-- lure
+  Show time: 0.25  | [D] K3 tried other values: not better (scores 8-11). Keep the measured number.
+  First claim: 0.3  | [D] K3 tried other values: not better (scores 8-11). Keep the measured number.
+  Fire time: 0.8  | [D] K3 tried other values: not better (scores 8-11). Keep the measured number.
+  Fire time (comers): 1.6  | [D] K4 tried other values: not better (scores 8-11). Keep the measured number.
+  Rest: 0.6  | [D] K4 tried other values: not better (scores 8-11). Keep the measured number.
+  Height: 90  | [D] K3 tried other values: not better (scores 8-11). Keep the measured number.
+  Height spread: 60  | [D] K3 tried other values: not better (scores 8-11). Keep the measured number.
+  Spread: 220  | [D] K3 tried other values: not better (scores 8-11). Keep the measured number.
+  Swarm size: 60  | [D] K4 tried other values: not better (scores 8-11). Keep the measured number.
+  Hush: 5  | [D] K4 tried other values: not better (scores 8-11). Keep the measured number.
+
+-- ring
+  Step time: 0.25  | [D] K5 tried other values: not better (scores 8-11). Keep the measured number.
+  Quick margin: 0.21  | [D] K5 tried other values: not better (scores 8-11). Keep the measured number.
+  Climb time: 0.9  | [D] K5 tried other values: not better (scores 8-11). Keep the measured number.
+  Step height: 35  | [D] K5 tried other values: not better (scores 8-11). Keep the measured number.
+  Claim spacing: 34  | [D] K5 tried other values: not better (scores 8-11). Keep the measured number.
+  Draw lag: 0.2  | [D] K6 tried other values: not better (scores 8-11). Keep the measured number.
+  Slack: 0.08  | [D] K6 tried other values: not better (scores 8-11). Keep the measured number.
+  Come-out time: 0.15  | [D] K6 tried other values: not better (scores 8-11). Keep the measured number.
+  Both steps for: 0.06  | [D] K6 tried other values: not better (scores 8-11). Keep the measured number.
+  Sightings: 4  | [D] K5 tried other values: not better (scores 8-11). Keep the measured number.
+
+-- flak
+  Read time: 1.6  | [D] K7 tried other values: not better (scores 8-11). Keep the measured number.
+  Least read: 0.7  | [D] K7 tried other values: not better (scores 8-11). Keep the measured number.
+  Area: 110  | [D] K7 tried other values: not better (scores 8-11). Keep the measured number.
+  Memory: 6  | [D] K7 tried other values: not better (scores 8-11). Keep the measured number.
+  Skip newest: 0.45  | [D] K7 tried other values: not better (scores 8-11). Keep the measured number.
+  Spacing: 20  | [D] K7 tried other values: not better (scores 8-11). Keep the measured number.
+  Places a shot: 16  | [D] K7 tried other values: not better (scores 8-11). Keep the measured number.
+  Places a shell: 8  | [D] K7 tried other values: not better (scores 8-11). Keep the measured number.
+
+-- ambush
+  In time for: 0.9  | [D] K8 tried other values: not better (scores 8-11). Keep the measured number.
+  Sightings: 3  | [D] K8 tried other values: not better (scores 8-11). Keep the measured number.
+  Spacing: 28  | [D] K8 tried other values: not better (scores 8-11). Keep the measured number.
+  Places a shot: 24  | [D] K8 tried other values: not better (scores 8-11). Keep the measured number.
+  Gun reach: 180  | [D] K8 tried other values: not better (scores 8-11). Keep the measured number.
+  Stay: 0.33  | [D] K8 tried other values: not better (scores 8-11). Keep the measured number.
+
+-- pounce
+  Floor: 10  | [D] K9 kept (12-0 / 12-0).
+  Roof: 116  | [D] K9 kept (12-0 / 12-0).
+  Reach: 49  | [D] K9 kept (12-0 / 12-0).
+  Stay: 0.3  | [D] K9 kept (12-0 / 12-0).
+  Places a try: 14  | [D] K9 kept (12-0 / 12-0).
+
+-- press
+  Comings-out: -  | [-] not set and not tested.
+  Spot size: -  | [-] not set and not tested.
+  Back within: -  | [-] not set and not tested.
+  Retry gap: 0.04  | [D] K1 tried other values: not better (scores 8-11). Keep the measured number.
+  Call cap: -  | [-] not set and not tested.
+  Stay: -  | [-] not set and not tested.
+  Places a try: -  | [-] not set and not tested.
+  Keep out: -  | [-] not set and not tested.
+  Follower near: -  | [-] not set and not tested.
+  Follower band: -  | [-] not set and not tested.
+  Grid: -  | [-] not set and not tested.
+  Back off: -  | [-] not set and not tested.
+
+-- swarm
+  Least reach: 60  | [D] K12 tried other values: not better (scores 8-11). Keep the measured number.
+  Hop: 38  | [D] K12 tried other values: not better (scores 8-11). Keep the measured number.
+  Clear: 27  | [D] K12 tried other values: not better (scores 8-11). Keep the measured number.
+  Longest hop: 80  | [D] K12 tried other values: not better (scores 8-11). Keep the measured number.
+
+MONSTER RAGE TAB (THE SUITE RAGEBOT), RESOLVER, DEFENSE, FAKE POSITION AND VOID
+  monster.fakepos.offX: default  | [-]
+  monster.fakepos.offY: default  | [-]
+  monster.fakepos.offZ: default  | [-]
+  monster.fakepos.radius: 25  | [-] jitter mode only.
+  monster.fakepos.rate: 120  | [-] jitter mode only.
+  monster.fakepos.resetOnKO: default  | [-]
+  monster.fakepos.backend: auto  | [I] raknet when it works, else the swap.
+  monster.fakepos.orbitAround: target  | [-]
+  monster.fakepos.moveReal: off  | [-] by the code it also runs your real body round the target at up to 420 studs/s (38 on the ground); not measured.
+  monster.void.position: sky  | [S] sky is a random place inside the packet format (thousands sent, no disconnect). Far / NaN were changed to clamped finite values this session because 1e29 ends in 260.
+  monster.void.protect: off  | attack only.
+  monster.void.whenDead: on  | [-] hides you for 4 s after a knock so the dead player's friends cannot answer.
+  monster.void.whileWaiting: off  | [I] one more place the void can start on its own.
+  monster.void.respawnRamp: on  | [-] the long hold after a respawn is what keeps you alive in the spawn.
+  monster.physrep.on: off  | [-] the PhysicsRepRootPart ride was never measured to work.
+  monster.rage.on: off for real fights  | [T] 1 of about 320 salvos accepted in five runs; use the Ragebot tab instead until that is solved.
+  monster.rage.targetMode: closest-to-me  | [D] closest beat threat-first in the duel (R4); [I] same logic here.
+  monster.rage.targets: the one name  | [T] single-target tests used one name; empty = everyone not a friend.
+  monster.rage.fov: 180  | [I] the ragebot should not care where the camera points.
+  monster.rage.walls: off  | [D] R5 kept walls off. [T] with it on, a wall between you and the fake body blocks every shot.
+  monster.rage.teamCheck: default  | [-]
+  monster.rage.switchWait: 0.14  | [S] closer than 0.14 s and a shot is lost.
+  monster.rage.part: head  | [D] R6: torso was in the 1-6 batch.
+  monster.rage.weapon: auto  | [I] auto picks the gun with rounds.
+  monster.rage.flame: off  | not measured.
+  monster.rage.salvo: on  | [S] a shotgun needs all five pellets sent together.
+  monster.rage.pipeline: on  | [I] only matters with 2+ targets.
+  monster.rage.oneTap: on  | [D] R6.
+  monster.rage.snipe: on  | [D] R7.
+  monster.rage.autoReload: on  | [S] nothing counts during a reload, so it must happen between shots.
+  monster.rage.smartReload: on  | [D] R6.
+  monster.rage.strafe: off  | [-] the sky strafe was never measured to land a shot.
+  monster.rage.strafeStyle: sky  | [S] sky stays inside what a packet carries; 200000-up is a body swap (260 risk).
+  monster.rage.chase: off  | [I] the fake body does the work; running the real body at them only adds risk.
+  monster.rage.walk: off  | [I] same as Chase.
+  monster.rage.jump: off  | [I] same as Chase.
+  monster.rage.stomp: on  | [S] 1.5-9.5 studs window.
+  monster.rage.pattern: haunt or none  | [T] ring hops every 0.25 s, which is why the old fixed arrival wait left no shot window. Use a pattern that holds still (haunt); none = no fake body.
+  monster.rage.safety: on  | [I] it pauses when you are knocked or loading.
+  monster.resolver.on: on  | [T] no gain, no harm in the recorded runs.
+  monster.resolver.skipLow: on  | [I] a low-confidence guess is a wasted shot.
+  monster.resolver.learn: on  | [-] not measured.
+  monster.resolver.overlay: off  | debug only.
+  monster.defense.on: off  | you said attack only; it voids you when a threat is near, which also stops you shooting.
+  monster.defense.antiBag: on (if Defense is on)  | [-]
+  monster.defense.antiFlame: on (if Defense is on)  | [-]
+  monster.defense.antiBait: on (if Defense is on)  | [-]
+
+-- MONSTER number constants (the K table)
+  INTERP: 0.18  | [S] measured 0.180 s on Volt.
+  NET_FAIL_COUNT: 20  | [-] default.
+  NET_FAIL_WINDOW: 2  | [-] default.
+  NET_UNPARSED_QUIET: 0.75  | [T] new this session; pauses crafted packets while the engine sends a layout the codec cannot read. Did not stop the 260.
+  VOID_BAIT: 0.1  | [-] default.
+  VOID_HOLD: 0.6  | [-] default.
+  VOID_PEEK: 0.12  | [-] default.
+  VOID_RAMP1: 3.2  | [-] default.
+  VOID_RAMP2: 0.55  | [-] default.
+  VOID_RAMP3: 0.25  | [-] default.
+  VOID_RAMP4: 0.15  | [-] default.
+  VOID_DEAD_HOLD: 4  | [-] default.
+  ORBIT_SPEED: 28  | [-] default.
+  ORBIT_RADIUS: 135  | [-] default.
+  ORBIT_H1: 900  | [S] 200000 is a body swap; 900 stays inside the packet.
+  ORBIT_H2: 870  | [S] same.
+  ORBIT_FLIP: 20  | [-] default.
+  ORBIT_JIT_H: 10  | [-] default.
+  ORBIT_JIT_V: 5  | [-] default.
+  ORBIT_JIT_RATE: 80  | [-] default.
+  ORBIT_VEL: 420  | [-] default.
+  ORBIT_GROUND_CAP: 38  | [-] default.
+  PHYS_RANGE: 60  | [-] default.
+  PHYS_UP: 3  | [-] default.
+  RES_WINDOW: 1.0  | [-] default.
+  RES_MAX_JUMP: 30  | [-] default.
+  RES_MAX_SPEED: 140  | [-] default.
+  RES_MIN_CONF: 0.35  | [-]
+  RES_SIGMA: 6  | [-] default.
+  RES_WATCH: 0.6  | [-] default.
+  DEF_SAFE: 90  | [-]
+  DEF_BAG: 12  | [-] default.
+  DEF_FLAME: 25  | [-] default.
+  DEF_GUN: 300  | [-] default.
+  DEF_TELE: 80  | [-] default.
+  RAGE_ARRIVE: 0.25  | [S] the measured window is 0.10-0.23 s.
+  RAGE_ARRIVE_PAD: 0.06  | [T] new this session; the arrival wait is ping + this, capped by RAGE_ARRIVE.
+  RAGE_RANGE: 250  | [-] default.
+  RAGE_STOMP: 3  | [-] default.
+  RAGE_RELOAD_AT: 0  | [-] default.
+
+DESYNC TAB
+Where fake position and the void are measured, the picks come from the 95 s duel and the notes written into the code.
+  Desync (monster.desync): off  | [C] its own text: 150+ studs of "How far" stopped BasedHub firing, so it is a defence trick. Both desync and fake position stop while the swap-path ragebot hunts.
+  How far (monster.desyncRange): 40  | [C] 150+ stopped BasedHub firing; that also moves where you can be hit.
+  Fake position (monster.fake): on while fighting  | 
+  Where (monster.fakeWhere): void  | [D] the void round: 22 hits, 0 taken, 95 s, vs BasedHub, with strikes (not reproduced this session). Decoy / Ghost / On target were measured earlier but not as a full duel (ghost: an origin 40 studs under the map was refused 0 of 3, 40 above was taken 3 of 3; decoy: shots refused 0.1-0.2 s after a hop).
+  Void strike (monster.voidStrike): on  | [D] the void round used it: a shot brings the body back for a moment.
+  New spot every step (monster.voidSpam): on  | [C] nobody can follow you in.
+  Strike spread (monster.strikeSpread): 12  | [D] strikes always at your real place lost 1-2 to BasedHub; a new place each time (12) gave 22 hits, 0 taken.
+  Show lures (monster.showLures): off  | [D] turning lure + ring lure off was the biggest gain in the sweep (R1).
+  Void strike arrive (monster.voidArrive): 0.25  | [S] window 0.10-0.23; the raknet path already uses ping + 0.06 (capped 0.08-0.4).
+  Use raknet (monster.rak): on  | [S] only the server is told the fake; you never move.
+  Shoot from fake (monster.rakShoot): on  | [S] the server refuses shots from anywhere but where it has the body.
+  Keep on with Ragebot (monster.rakRage): on  | 
+  Face (monster.rakFace): as you  | [-] not measured.
+  Send rate (monster.rakRate): 30  | [T] 25-30 sent per second held for 40 s runs with 0 failures. Your saved 10 leaves the server body 100 ms stale.
+  Decoy up (monster.decoyUp): 0  | [-]
+  Ghost height (monster.ghostHeight): 120  | [C] a shot is refused when anything is in the line from the ghost to the target: too high under a roof loses every shot.
+  Ghost dodge (monster.ghostJitter): 10  | [C] stays under the 17-stud origin rule, so your shots still land.
+  From target (monster.fakeNear): 4  | [-]
+  How far (monster.fakeDistance): 40  | [-] only for Below / Behind / Side / Above.
+  Show where they see you (monster.desyncBox): on  | debug aid: the red body.
+  Off while holding (monster.desyncTools): on  | [-]
