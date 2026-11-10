@@ -4511,22 +4511,6 @@ function UI.extras(page)
 	controls(ride, { "monster.physrep.on" })
 end
 
-local function addPage(id, title, icon, build)
-	task.spawn(function()
-		local giveUp = os.clock() + 60
-		while not (Window.pages and Window.pages["dahood.ragebot"]) and os.clock() < giveUp and GUI.Parent do task.wait(0.25) end
-		local rage = Window.pages and Window.pages["dahood.ragebot"]
-		if not rage or DH.stopped then return end
-		local last = rage.order
-		for _, page in ipairs(Window.order) do
-			if page.group == rage.group and page.order > last then last = page.order end
-		end
-		Window.page({ id = id, title = title, icon = icon, group = rage.group, order = last + 1, eyebrow = rage.eyebrow, build = build })
-		UI.pages = UI.pages or {}
-		UI.pages[#UI.pages + 1] = id
-	end)
-end
-
 local STATUS = {}
 local function statusText()
 	local fp, net, void, rage, res, def, phys = DH.Fakepos.status(), DH.Net.status(), DH.Void.status(), DH.Rage.status(), DH.Resolver.status(), DH.Defense.status(), DH.Physrep.status()
@@ -4553,58 +4537,7 @@ function UI.init()
 		end
 	end)), "ui.anchor")
 
-	addPage("dahood.mrage", "Rage", "skull", function(page)
-		local a = page:section({ title = "Ragebot", icon = "skull", desc = "MONSTER's own fighter: shoots from the fake position." })
-		controls(a, { "monster.rage.on", "monster.rage.key", "monster.rage.keyMode", "monster.rage.safety" })
-		local t = page:section({ title = "Targets", icon = "search", desc = "Who it picks, and who it never does." })
-		controls(t, { "monster.rage.targetMode", "monster.rage.targets", "monster.rage.fov", "monster.rage.walls", "monster.rage.teamCheck", "monster.rage.switchWait" })
-		local f = page:section({ title = "Firing", icon = "settings-2", desc = "The gun, and how it is fired." })
-		controls(f, { "monster.rage.part", "monster.rage.weapon", "monster.rage.flame", "monster.rage.salvo", "monster.rage.pipeline", "monster.rage.oneTap", "monster.rage.snipe", "monster.rage.autoReload", "monster.rage.smartReload" })
-		local m = page:section({ title = "Movement", icon = "orbit", desc = "Where it stands and how your own body moves." })
-		controls(m, { "monster.rage.strafe", "monster.rage.strafeStyle", "monster.rage.pattern", "monster.rage.chase", "monster.rage.walk", "monster.rage.jump", "monster.rage.stomp" })
-	end)
-	addPage("dahood.mresolver", "Resolver", "radio", function(page)
-		local a = page:section({ title = "Resolver", icon = "radio", desc = "Finds the real body of a player who hides." })
-		controls(a, { "monster.resolver.on", "monster.resolver.skipLow", "monster.resolver.learn", "monster.resolver.overlay" })
-		local k = page:section({ title = "Tuning", icon = "settings-2", desc = "The numbers the estimators use." })
-		for _, def in ipairs(DH.KDEFS) do if def[6] == "resolver" then control(k, DH.K.id(def[1])) end end
-	end)
-	addPage("dahood.mdefense", "Defense", "shield", function(page)
-		local a = page:section({ title = "Defense", icon = "shield", desc = "Anti bag, anti flame, anti bait: all by going to the void." })
-		controls(a, { "monster.defense.on", "monster.defense.antiBag", "monster.defense.antiFlame", "monster.defense.antiBait" })
-		local k = page:section({ title = "Tuning", icon = "settings-2", desc = "Distances and holds." })
-		for _, def in ipairs(DH.KDEFS) do if def[6] == "defense" or def[6] == "void" then control(k, DH.K.id(def[1])) end end
-	end)
-	addPage("dahood.msuite", "Suite", "settings-2", function(page)
-		local s = page:section({ title = "Status", icon = "radio", desc = "What the suite is doing now." })
-		STATUS.lines = {}
-		for i = 1, 6 do STATUS.lines[i] = s:label("") end
-		local acc = 0
-		STATUS.conn = DH.janitor:add(S.Run.Heartbeat:Connect(DH.safe("ui.status", function(dt)
-			acc += dt
-			if acc < 0.25 then return end
-			acc = 0
-			if not STATUS.lines[1].frame.Parent then return end
-			for i, text in ipairs(statusText()) do STATUS.lines[i].set(text) end
-		end)), "ui.status")
-		local act = page:section({ title = "Actions", icon = "shield", desc = "Panic stops and unhooks everything." })
-		act:button({ label = "Panic", text = "Stop all", style = "danger", desc = "Everything off, real position restored, hooks removed. Reload to use it again.", run = function() DH.panic("button") end })
-		act:button({ label = "Probe", text = "Run", desc = "What this executor can do: written to monster_probe.json.", run = function()
-			DH.Probe.run({ done = function(r) DH.notify("Probe done: raknet " .. tostring(r.scan.raknet.present) .. ", receive hooks " .. tostring(#r.scan.receive)) end })
-		end })
-		controls(act, { "monster.panic.key" })
-		local groups, order = {}, {}
-		for _, def in ipairs(DH.KDEFS) do
-			if def[6] ~= "resolver" and def[6] ~= "defense" and def[6] ~= "void" then
-				if not groups[def[6]] then groups[def[6]] = {}; order[#order + 1] = def[6] end
-				table.insert(groups[def[6]], def[1])
-			end
-		end
-		for _, name in ipairs(order) do
-			local sec = page:section({ title = "Tuning: " .. name, icon = "settings-2", desc = "Numbers from measurement; change with care." })
-			for _, k in ipairs(groups[name]) do control(sec, DH.K.id(k)) end
-		end
-	end)
+	-- Rage, Resolver, Defense, and Suite pages removed at user request.
 end
 function UI.enable() end
 function UI.disable()
@@ -5260,55 +5193,7 @@ do
 		showBox(fake)
 	end)
 
-	-- its own tab, beside Da Hood's (another game has no Ragebot tab, and gets none of this)
-	task.spawn(function()
-		local giveUp = os.clock() + 60
-		while not (Window.pages and Window.pages["dahood.ragebot"]) and os.clock() < giveUp and GUI.Parent do task.wait(0.25) end
-		local rage = Window.pages and Window.pages["dahood.ragebot"]
-		if not rage then return end
-		local last = rage.order
-		for _, page in ipairs(Window.order) do
-			if page.group == rage.group and page.order > last then last = page.order end
-		end
-		Window.page({ id = "dahood.monster", title = "Desync", icon = "ghost", group = rage.group, order = last + 1, eyebrow = rage.eyebrow, build = function(page)
-			local jump = page:section({ title = "Desync", icon = "shuffle", desc = "Others see you somewhere new every step." })
-			jump:toggle({ id = "monster.desync", label = "Desync", desc = "You jump around for them. Their shots miss.", default = false })
-			jump:slider({ id = "monster.desyncRange", label = "How far", desc = "How far from you they see you. 150+ stopped BasedHub firing.", min = 10, max = 400, step = 5, default = 40, suffix = " st" })
-			local fake = page:section({ title = "Fake position", icon = "map-pin", desc = "Others see you in one other place." })
-			fake:toggle({ id = "monster.fake", label = "Fake position", desc = "They see you there, you play here.", default = false })
-			fake:dropdown({ id = "monster.fakeWhere", label = "Where", desc = "Decoy: they see you stand still, you roam.",
-				options = { { "decoy", "Decoy" }, { "ghost", "Ghost" }, { "target", "On target" }, { "void", "Void" }, { "orbit", "Orbit target" }, { "offset", "Offset" }, { "freeze", "Freeze" }, { "below", "Below" }, { "behind", "Behind" }, { "side", "Side" }, { "above", "Above" }, table.unpack(DH.Fakepos.MODES) }, default = "decoy" })
-			fake:slider({ id = "monster.fakeOffX", label = "Offset X", desc = "Offset: right (+) or left (-).", min = -150, max = 150, step = 1, default = 0, suffix = " st" })
-			fake:slider({ id = "monster.fakeOffY", label = "Offset Y", desc = "Offset: up (+) or down (-).", min = -100, max = 300, step = 1, default = 0, suffix = " st" })
-			fake:slider({ id = "monster.fakeOffZ", label = "Offset Z", desc = "Offset: behind (+) or in front (-).", min = -150, max = 150, step = 1, default = 30, suffix = " st" })
-			fake:slider({ id = "monster.orbitRadius", label = "Orbit radius", desc = "Orbit: how far round the target.", min = 2, max = 60, step = 1, default = 10, suffix = " st" })
-			fake:slider({ id = "monster.orbitHeight", label = "Orbit height", desc = "Orbit: above (+) or below (-) them.", min = -10, max = 60, step = 1, default = 0, suffix = " st" })
-			fake:slider({ id = "monster.orbitSpeed", label = "Orbit speed", desc = "Orbit: how fast it goes round.", min = 1, max = 20, step = 1, default = 6 })
-			fake:slider({ id = "monster.decoyUp", label = "Decoy up", desc = "Decoy: raise it, out of reach (0 = where you stand).", min = 0, max = 250, step = 5, default = 0, suffix = " st" })
-			fake:slider({ id = "monster.ghostJitter", label = "Ghost dodge", desc = "Ghost: how far it jumps about. 0 is off.", min = 0, max = 14, step = 1, default = 10, suffix = " st" })
-			fake:slider({ id = "monster.ghostHeight", label = "Ghost height", desc = "Ghost: how high up they see you.", min = 30, max = 250, step = 5, default = 120, suffix = " st" })
-			fake:slider({ id = "monster.fakeNear", label = "From target", desc = "How close to them, on target.", min = 2, max = 12, step = 1, default = 4, suffix = " st" })
-			fake:slider({ id = "monster.fakeDistance", label = "How far", desc = "How far from you, the others.", min = 5, max = 200, step = 1, default = 40, suffix = " st" })
-			local both = page:section({ title = "Both", icon = "settings-2", desc = "Both stop while the ragebot hunts (not over raknet)." })
-			both:toggle({ id = "monster.desyncTools", label = "Off while holding", desc = "A gun out brings you back (not on target).", default = true })
-			both:toggle({ id = "monster.desyncBox", label = "Show where they see you", desc = "A red body at your fake place.", default = true })
-			if Rak.available then
-				local rak = page:section({ title = "Raknet", icon = "radio", desc = "Volt: only the server is told the fake. You never move." })
-				rak:toggle({ id = "monster.rak", label = "Use raknet", desc = "Off: the old body swap.", default = true })
-				rak:toggle({ id = "monster.rakShoot", label = "Shoot from fake", desc = "Your shots leave from where they see you.", default = true })
-				rak:toggle({ id = "monster.rakRage", label = "Keep on with Ragebot", desc = "The ragebot fights, they see the fake.", default = true })
-				rak:dropdown({ id = "monster.rakFace", label = "Face", desc = "Which way the fake looks.",
-					options = { { "you", "As you" }, { "target", "The target" }, { "spin", "Spin" } }, default = "you" })
-				rak:slider({ id = "monster.rakRate", label = "Send rate", desc = "Fake updates a second.", min = 10, max = 60, step = 1, default = 30, suffix = "/s" })
-			end
-			local void = page:section({ title = "Void", icon = "orbit", desc = "Where = Void: they see you jump around the sky." })
-			void:toggle({ id = "monster.voidStrike", label = "Strike to shoot", desc = "A shot brings you back for a moment.", default = true })
-			void:toggle({ id = "monster.voidSpam", label = "New spot every step", desc = "Nobody can follow you in.", default = true })
-			void:toggle({ id = "monster.showLures", label = "Show lures", desc = "The ragebot's lures are seen, so hiders come out.", default = true })
-			void:slider({ id = "monster.strikeSpread", label = "Strike spread", desc = "Each shot shows you somewhere new near you. 0 = where you stand.", min = 0, max = 25, step = 1, default = 12, suffix = " st" })
-			DH.UI.extras(page)
-		end })
-	end)
+	-- Desync page removed at user request.
 
 	DH.desyncStop = function() Desync.stop() end
 	function Desync.stop()
